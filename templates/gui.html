@@ -1,0 +1,2877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clip Factory – {{ vod_id }}</title>
+<style>
+/* ── Font ── */
+@font-face {
+  font-family: 'Komika Axis';
+  src: url('/font/KOMIKAX_.ttf') format('truetype');
+}
+
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: #111827;
+  color: #f9fafb;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Layout ── */
+#app {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #111827; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+/* ── Left panel ── */
+#panel-left {
+  width: 260px;
+  min-width: 260px;
+  background: #1f2937;
+  border-right: 1px solid #374151;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#panel-left h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #374151;
+  flex-shrink: 0;
+}
+#candidate-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 6px;
+}
+.cand-card {
+  background: #374151;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+.cand-card:hover { background: #404b5a; }
+.cand-card.selected { border-color: #6366f1; background: #2d3748; }
+.cand-card.approved-mark { border-color: #22c55e; }
+.cand-card.approved-mark.selected { border-color: #6366f1; }
+.cand-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.cand-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6366f1;
+  min-width: 28px;
+}
+.cand-time { font-weight: 600; font-size: 13px; }
+.cand-stars { margin-left: auto; color: #fbbf24; font-size: 11px; letter-spacing: 1px; }
+.cand-reasons {
+  font-size: 11px;
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Center panel ── */
+#panel-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 16px;
+  gap: 14px;
+  background: #111827;
+}
+
+/* ── Video area ── */
+#video-area {
+  position: relative;
+  display: inline-block;
+  max-width: 640px;
+  align-self: center;
+  width: 100%;
+}
+#player {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  border-radius: 8px;
+  background: #000;
+
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* ── Crop toolbar ── */
+#crop-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#crop-toolbar label { font-size: 12px; color: #9ca3af; }
+
+/* ── Trim bar ── */
+#trim-section { background: #1f2937; border-radius: 8px; padding: 12px 14px; }
+#trim-section h3 { font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+.trim-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.trim-row label { font-size: 12px; color: #d1d5db; width: 40px; flex-shrink: 0; }
+.trim-row input[type="range"] { flex: 1; accent-color: #6366f1; }
+.trim-time { font-size: 12px; font-weight: 600; color: #f9fafb; width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
+#timeline-strip {
+  position: relative;
+  height: 20px;
+  background: #374151;
+  border-radius: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+#timeline-window {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(99,102,241,0.35);
+  border-left: 2px solid #6366f1;
+  border-right: 2px solid #6366f1;
+}
+#timeline-peak {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  background: #fbbf24;
+}
+#timeline-playhead {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  background: #ef4444;
+  pointer-events: none;
+}
+
+/* ── Subtitles section ── */
+#subs-section { background: #1f2937; border-radius: 8px; overflow: hidden; }
+#subs-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+#subs-toggle h3 { font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; }
+#subs-toggle .chevron { color: #6b7280; font-size: 11px; transition: transform 0.2s; }
+#subs-toggle.open .chevron { transform: rotate(180deg); }
+#subs-body { padding: 0 14px 12px; display: none; }
+#subs-body.open { display: block; }
+.subs-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.subs-row label { font-size: 12px; color: #d1d5db; width: 110px; flex-shrink: 0; }
+.subs-row input[type="range"] { flex: 1; accent-color: #6366f1; }
+.subs-row input[type="color"] { width: 44px; height: 28px; border: none; border-radius: 4px; cursor: pointer; background: none; padding: 0; }
+.subs-row select { background: #374151; color: #f9fafb; border: 1px solid #4b5563; border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.subs-row .val { font-size: 12px; color: #9ca3af; width: 36px; text-align: right; }
+.subs-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: #6366f1; }
+#subs-preview {
+  margin-top: 10px;
+  background: #111827;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#preview-text {
+  font-family: 'Komika Axis', sans-serif;
+  font-size: 28px;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+.preview-word { display: inline-block; margin: 0 3px; }
+.preview-word.active { }
+
+/* ── Chat section ── */
+#chat-section { background: #1f2937; border-radius: 8px; padding: 12px 14px; }
+#chat-section h3 { font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+.chat-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.chat-option:hover { background: #2d3748; }
+.chat-option input[type="radio"] { margin-top: 2px; accent-color: #6366f1; flex-shrink: 0; }
+.chat-meta { font-size: 11px; color: #6b7280; }
+.chat-user { font-weight: 700; color: #818cf8; }
+.chat-text { font-size: 13px; color: #f9fafb; line-height: 1.4; }
+.chat-score { font-size: 10px; color: #6b7280; margin-left: auto; flex-shrink: 0; }
+#chat-loading { font-size: 12px; color: #6b7280; font-style: italic; }
+
+/* ── Action buttons ── */
+#action-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+}
+.btn {
+  padding: 9px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+  outline: none;
+}
+.btn:hover { opacity: 0.85; }
+.btn:active { transform: scale(0.97); }
+.btn-approve { background: #22c55e; color: #fff; }
+.btn-approve-add { background: #15803d; color: #fff; }
+.btn-skip { background: #ef4444; color: #fff; }
+.btn-split { background: #f59e0b; color: #111; font-weight: 700; }
+
+/* ── Transcript / subtitle text editor ── */
+#transcript-section { background: #1f2937; border-radius: 8px; padding: 12px 14px; }
+#transcript-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+#transcript-header h3 { font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
+#transcript-status { font-size: 11px; color: #6b7280; margin-left: auto; }
+.word-editor {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: flex-start;
+  min-height: 50px; padding: 8px; background: #111827;
+  border: 1px solid #374151; border-radius: 6px; margin: 4px 0 8px; cursor: text;
+}
+.word-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: #374151; border-radius: 4px; padding: 3px 6px 3px 8px;
+  border: 1px solid transparent; transition: border-color 0.1s;
+}
+.word-chip:focus-within { border-color: #6366f1; background: #1e2a45; }
+.word-text {
+  outline: none; min-width: 14px; cursor: text; font-size: 13px;
+  font-family: 'Komika Axis', sans-serif; color: #f9fafb; white-space: nowrap;
+}
+.word-del {
+  font-size: 11px; color: #4b5563; cursor: pointer;
+  padding: 0 1px; line-height: 1; border: none; background: none; font-family: sans-serif;
+}
+.word-del:hover { color: #ef4444; }
+.word-censor-btn {
+  font-size: 11px; cursor: pointer; padding: 0 2px; line-height: 1;
+  border: none; background: none; color: #4b5563; flex-shrink: 0;
+}
+.word-censor-btn:hover { color: #f87171; }
+.word-chip.censored { background: #450a0a; border-color: #ef4444; }
+.word-chip.censored .word-text { color: #fca5a5; }
+.word-chip.censored .word-censor-btn { color: #ef4444; }
+.word-placeholder { font-size: 12px; color: #4b5563; font-style: italic; padding: 6px 2px; }
+#transcript-toolbar { display: flex; gap: 6px; align-items: center; }
+.btn-next { background: #374151; color: #f9fafb; }
+.btn-render { background: #6366f1; color: #fff; width: 100%; }
+.btn-detect { background: #6366f1; color: #fff; }
+.btn-crop-toggle { background: #374151; color: #f9fafb; padding: 6px 12px; font-size: 12px; }
+.btn-crop-toggle.active { background: #6366f1; }
+.btn-clear-crop { background: #374151; color: #9ca3af; padding: 6px 12px; font-size: 12px; }
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* ── Right panel ── */
+#panel-right {
+  width: 220px;
+  min-width: 220px;
+  background: #1f2937;
+  border-left: 1px solid #374151;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#panel-right h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid #374151;
+  flex-shrink: 0;
+}
+#approved-preview-section {
+  padding: 8px 10px;
+  border-bottom: 1px solid #374151;
+  flex-shrink: 0;
+  display: none;
+}
+#approved-preview-inner {
+  display: flex; gap: 10px; align-items: flex-start;
+}
+#approved-preview-canvas {
+  display: block; flex-shrink: 0; border-radius: 6px; background: #000; cursor: pointer;
+  width: 72px; height: 128px;
+}
+#approved-preview-right {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;
+}
+#approved-preview-meta {
+  font-size: 10px; color: #6b7280; line-height: 1.5;
+}
+#approved-trim {
+  display: flex; flex-direction: column; gap: 5px;
+}
+.atrim-row { display: flex; align-items: center; gap: 5px; }
+.atrim-label { font-size: 10px; color: #9ca3af; width: 22px; flex-shrink: 0; font-weight: 600; }
+.atrim-row input[type="range"] { flex: 1; accent-color: #6366f1; height: 3px; }
+.atrim-val { font-size: 10px; color: #f9fafb; width: 46px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+#atrim-strip {
+  position: relative; height: 6px; background: #374151; border-radius: 3px; margin: 2px 0;
+}
+#atrim-win { position: absolute; top: 0; bottom: 0; background: rgba(99,102,241,0.45); border-radius: 3px; }
+#atrim-peak { position: absolute; top: -1px; bottom: -1px; width: 2px; background: #fbbf24; border-radius: 1px; }
+#approved-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+.approved-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #374151;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 5px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.12s;
+}
+.approved-card:hover { border-color: #4b5563; }
+.approved-card.selected { border-color: #6366f1; }
+.approved-num { font-size: 11px; color: #6366f1; font-weight: 700; min-width: 22px; }
+.approved-time { font-size: 13px; font-weight: 600; flex: 1; }
+.approved-remove {
+  background: none;
+  border: none;
+  color: #ef4444;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.12s;
+}
+.approved-remove:hover { opacity: 1; }
+#render-footer {
+  padding: 12px;
+  border-top: 1px solid #374151;
+  flex-shrink: 0;
+}
+#render-status {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 8px;
+  text-align: center;
+  min-height: 16px;
+}
+.spinner {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 2px solid #9ca3af;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── No candidates prompt ── */
+#no-candidates {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 16px;
+  color: #9ca3af;
+}
+#no-candidates h2 { font-size: 18px; color: #f9fafb; }
+#no-candidates p { font-size: 14px; }
+#detect-status { font-size: 13px; color: #6b7280; }
+
+/* ── Keyboard shortcut hint ── */
+#kbd-hint {
+  font-size: 11px;
+  color: #4b5563;
+  padding: 6px 14px 8px;
+  border-top: 1px solid #1f2937;
+  flex-shrink: 0;
+}
+kbd {
+  background: #374151;
+  border: 1px solid #4b5563;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: monospace;
+}
+
+/* ── Header ── */
+#hdr {
+  height: 46px; flex-shrink: 0;
+  background: #1f2937; border-bottom: 1px solid #374151;
+  display: flex; align-items: center; padding: 0 16px; gap: 12px; z-index: 10;
+}
+#hdr-title { font-weight: 800; font-size: 15px; color: #6366f1; letter-spacing: 0.02em; }
+#hdr-vod { font-size: 12px; color: #9ca3af; }
+#hdr-vod strong { color: #f9fafb; font-family: monospace; }
+#hdr-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+#hdr-approved-count { font-size: 12px; color: #9ca3af; }
+
+/* ── Modal overlay ── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 300; backdrop-filter: blur(3px);
+}
+.modal-box {
+  background: #1f2937; border: 1px solid #374151; border-radius: 12px;
+  padding: 24px; width: 500px; max-width: 95vw; max-height: 88vh;
+  overflow-y: auto; box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+}
+.modal-box.modal-wide { width: 640px; }
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;
+}
+.modal-header h2 { font-size: 16px; font-weight: 700; }
+.modal-close {
+  background: none; border: none; color: #9ca3af; font-size: 20px;
+  cursor: pointer; padding: 0 6px; border-radius: 4px; line-height: 1;
+}
+.modal-close:hover { color: #f9fafb; background: #374151; }
+.modal-actions { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+
+/* ── Inputs ── */
+.text-input {
+  width: 100%; background: #111827; border: 1px solid #4b5563;
+  border-radius: 6px; color: #f9fafb; padding: 9px 12px; font-size: 13px; margin: 10px 0;
+}
+.text-input:focus { outline: none; border-color: #6366f1; }
+.vod-type-row { display: flex; gap: 20px; }
+.radio-label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+.modal-msg { font-size: 12px; margin-top: 6px; min-height: 18px; }
+.modal-msg.err { color: #f87171; }
+.modal-msg.ok  { color: #34d399; }
+
+/* ── Progress bar ── */
+.progress-bar-wrap { margin: 14px 0; }
+.progress-bar-track { height: 8px; background: #374151; border-radius: 4px; overflow: hidden; }
+.progress-bar-fill  { height: 100%; background: #6366f1; border-radius: 4px; transition: width 0.4s; }
+.progress-bar-fill.indeterminate { width: 35%; animation: progslide 1.5s ease-in-out infinite; }
+@keyframes progslide { 0%{transform:translateX(-150%)} 60%{transform:translateX(350%)} 100%{transform:translateX(350%)} }
+.progress-step { font-size: 13px; color: #d1d5db; margin-top: 8px; font-weight: 600; min-height: 20px; }
+.progress-log {
+  margin-top: 10px; max-height: 160px; overflow-y: auto;
+  background: #111827; border-radius: 6px; padding: 8px 10px;
+  font-family: monospace; font-size: 11px; color: #6b7280;
+}
+.ll { margin-bottom: 1px; }
+.ll.step { color: #a5b4fc; font-weight: 700; }
+.ll.done { color: #34d399; font-weight: 700; }
+.ll.err  { color: #f87171; }
+.progress-result { margin-top: 12px; text-align: center; font-size: 14px; font-weight: 700; min-height: 20px; }
+.progress-result.ok  { color: #34d399; }
+.progress-result.err { color: #f87171; }
+
+/* ── Export selector ── */
+#export-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.export-opt {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: #374151; border-radius: 8px; padding: 12px 14px;
+  cursor: pointer; border: 2px solid transparent; user-select: none;
+}
+.export-opt:hover { background: #404b5a; }
+.export-opt.checked { border-color: #6366f1; background: #1e2a45; }
+.export-opt input[type=checkbox] { accent-color: #6366f1; flex-shrink: 0; margin-top: 3px; width: 16px; height: 16px; }
+.export-opt-name { font-size: 14px; font-weight: 700; line-height: 1.3; }
+.export-opt-desc { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.export-warn { font-size: 11px; color: #f87171; margin-top: 4px; font-weight: 600; }
+.render-status-inline { margin-top: 14px; }
+
+/* ── Extra buttons ── */
+.btn-outline {
+  background: transparent; border: 1px solid #4b5563; color: #d1d5db;
+  padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 500;
+}
+.btn-outline:hover { border-color: #6366f1; color: #a5b4fc; }
+.btn-primary {
+  background: #6366f1; border: none; color: white;
+  padding: 8px 18px; border-radius: 6px; cursor: pointer; font-weight: 700;
+}
+.btn-primary:hover { background: #4f46e5; }
+.btn-primary:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+.btn-ghost {
+  background: #374151; border: none; color: #d1d5db;
+  padding: 8px 14px; border-radius: 6px; cursor: pointer;
+}
+.btn-ghost:hover { background: #4b5563; }
+.btn-sm { padding: 4px 10px !important; font-size: 11px !important; }
+.btn-green {
+  background: #22c55e; border: none; color: white;
+  padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 14px;
+}
+.btn-green:hover { background: #16a34a; }
+.btn-green:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+
+/* ── Clip edit modal ── */
+#edit-video-canvas {
+  display: block; width: 100%; border-radius: 6px; background: #000;
+  cursor: crosshair; user-select: none;
+}
+.edit-sliders { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.edit-row { display: flex; align-items: center; gap: 8px; }
+.edit-row label { font-size: 12px; color: #9ca3af; width: 80px; flex-shrink: 0; }
+.edit-row input[type="range"] { flex: 1; accent-color: #6366f1; }
+.edit-val { font-size: 12px; color: #f9fafb; width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.section-label {
+  font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase;
+  letter-spacing: 0.08em; margin-bottom: 10px;
+}
+.layout-opts { display: flex; gap: 10px; }
+.layout-opt {
+  flex: 1; display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; background: #374151; border-radius: 8px;
+  border: 2px solid transparent; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.layout-opt:has(input:checked) { border-color: #6366f1; background: #1e2a45; }
+.layout-opt input[type="radio"] { accent-color: #6366f1; flex-shrink: 0; }
+.layout-opt-icon { font-size: 22px; }
+.layout-opt-text { min-width: 0; }
+.layout-opt-name { font-size: 13px; font-weight: 600; color: #f9fafb; }
+.layout-opt-desc { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+.modal-divider { border: none; border-top: 1px solid #374151; margin: 16px 0; }
+#render-preview-wrap { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+#render-preview { display: block; border-radius: 6px; background: #000; width: 108px; height: 192px; }
+#transcript-body { display: flex; gap: 12px; align-items: flex-start; }
+#transcript-left { flex: 1; min-width: 0; }
+.btn-edit { background: #374151; color: #d1d5db; }
+.btn-edit:hover { background: #4b5563; }
+
+/* ── Transcript review modal ── */
+.modal-transcript-box { width: 720px; }
+#tr-player-wrap { width:100%; border-radius:8px; overflow:hidden; margin-bottom:12px; background:#000; }
+#tr-player { width:100%; max-height:220px; display:block; }
+.transcript-fulltext {
+  min-height: 80px; max-height: 280px; overflow-y: auto;
+  background: #111827; border: 1px solid #374151; border-radius: 8px;
+  padding: 14px 16px; font-size: 17px; line-height: 2.0;
+  color: #f9fafb; letter-spacing: 0.02em; cursor: text;
+}
+.tw {
+  display: inline; cursor: pointer; border-radius: 3px;
+  padding: 1px 3px; margin: 0 1px; outline: none;
+  transition: background 0.08s;
+}
+.tw:hover { background: rgba(99,102,241,0.25); }
+.tw.playing { background: #fbbf24; color: #111; border-radius: 3px; }
+.tw:focus { background: rgba(99,102,241,0.3); outline: 2px solid #6366f1; border-radius: 3px; }
+.approved-tr-btn, .approved-export-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 13px; padding: 2px 5px; color: #9ca3af; border-radius: 3px;
+}
+.approved-tr-btn:hover, .approved-export-btn:hover { background: #374151; color: #f9fafb; }
+</style>
+</head>
+<body>
+
+<!-- ─── Header ─── -->
+<header id="hdr">
+  <div id="hdr-title">🎬 Clip Factory</div>
+  <div id="hdr-vod">VOD: <strong id="hdr-vod-id">{{ vod_id }}</strong></div>
+  <div id="hdr-actions">
+    <span id="hdr-approved-count"></span>
+    <button class="btn btn-outline" id="btn-select-vod">📂 Change VOD</button>
+    <button class="btn btn-outline" id="btn-hdr-detect">🔍 Run Detection</button>
+  </div>
+</header>
+
+<div id="app" style="flex:1;overflow:hidden;display:flex">
+
+  <!-- ─── Left: Candidate list ─── -->
+  <div id="panel-left">
+    <h2>Candidates</h2>
+    <div id="candidate-list"></div>
+    <div id="kbd-hint">
+      <kbd>←</kbd><kbd>→</kbd> navigate &nbsp;
+      <kbd>Y</kbd> approve &nbsp;
+      <kbd>N</kbd> skip
+    </div>
+  </div>
+
+  <!-- ─── Center: Editor ─── -->
+  <div id="panel-center">
+
+    <!-- No-candidates prompt -->
+    <div id="no-candidates">
+      <h2>No candidates found</h2>
+      <p>Run detection to find hype moments in this VOD.</p>
+      <button class="btn btn-detect" id="btn-run-detect">Run Detection</button>
+      <div id="detect-status"></div>
+    </div>
+
+    <!-- Video player -->
+    <div id="video-area" style="display:none">
+      <video id="player" controls preload="metadata"></video>
+    </div>
+
+    <!-- Trim bar -->
+    <div id="trim-section" style="display:none">
+      <h3>Trim</h3>
+      <div class="trim-row">
+        <label>Start</label>
+        <input type="range" id="trim-start" min="0" max="100" step="0.01" value="0">
+        <span class="trim-time" id="trim-start-label">0:00.00</span>
+      </div>
+      <div class="trim-row">
+        <label>End</label>
+        <input type="range" id="trim-end" min="0" max="100" step="0.01" value="100">
+        <span class="trim-time" id="trim-end-label">0:00.00</span>
+      </div>
+      <div id="timeline-strip">
+        <div id="timeline-window"></div>
+        <div id="timeline-peak"></div>
+        <div id="timeline-playhead"></div>
+      </div>
+    </div>
+
+    <!-- Subtitle settings -->
+    <div id="subs-section" style="display:none">
+      <div id="subs-toggle" class="open">
+        <h3>Subtitles</h3>
+        <span class="chevron">▼</span>
+      </div>
+      <div id="subs-body" class="open">
+        <div class="subs-row">
+          <label>Font size</label>
+          <input type="range" id="subs-size" min="40" max="150" step="1" value="90">
+          <span class="val" id="subs-size-val">90</span>
+        </div>
+        <div class="subs-row">
+          <label>Primary color</label>
+          <input type="color" id="subs-primary" value="#ffffff">
+        </div>
+        <div class="subs-row">
+          <label>Highlight color</label>
+          <input type="color" id="subs-highlight" value="#ffff00">
+        </div>
+        <div class="subs-row">
+          <label>Position (Y)</label>
+          <input type="range" id="subs-pos" min="0.50" max="0.95" step="0.01" value="0.75">
+          <span class="val" id="subs-pos-val">0.75</span>
+        </div>
+        <div class="subs-row">
+          <label>Words/line</label>
+          <select id="subs-words">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4" selected>4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+          </select>
+        </div>
+        <div class="subs-row">
+          <label>All caps</label>
+          <input type="checkbox" id="subs-caps" checked>
+        </div>
+        <!-- Live preview -->
+        <div id="subs-preview">
+          <div id="preview-text">
+            <span class="preview-word" id="pw1">SAMPLE</span>
+            <span class="preview-word active" id="pw2">ACTIVE</span>
+            <span class="preview-word" id="pw3">TEXT</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat overlay -->
+    <!-- Transcript / subtitle text editor -->
+    <div id="transcript-section" style="display:none">
+      <div id="transcript-header">
+        <h3>Subtitle Text</h3>
+        <button class="btn btn-sm btn-ghost" id="btn-load-transcript">⟳ Transcribe</button>
+        <span id="transcript-status"></span>
+      </div>
+      <div id="transcript-body">
+        <div id="transcript-left">
+          <div id="word-editor" class="word-editor">
+            <span class="word-placeholder">Click "Transcribe" to load editable subtitle words for this clip</span>
+          </div>
+          <div id="transcript-toolbar">
+            <button class="btn btn-sm btn-ghost" id="btn-add-word">+ Add word</button>
+            <button class="btn btn-sm btn-ghost" id="btn-clear-transcript">✕ Clear</button>
+            <span style="font-size:11px;color:#6b7280;margin-left:4px">Click any word to edit · × to delete</span>
+          </div>
+        </div>
+        <div id="render-preview-wrap">
+          <canvas id="render-preview" width="216" height="384"></canvas>
+          <span style="font-size:9px;color:#4b5563">Preview</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="chat-section" style="display:none">
+      <h3>Chat Overlay</h3>
+      <div id="chat-options">
+        <div class="chat-option" id="chat-none-opt">
+          <input type="radio" name="chat-msg" value="none" id="radio-none" checked>
+          <label for="radio-none" style="cursor:pointer">No overlay</label>
+        </div>
+        <div id="chat-loading">Loading messages…</div>
+      </div>
+    </div>
+
+    <!-- Action buttons -->
+    <div id="action-bar" style="display:none">
+      <button class="btn btn-approve" id="btn-approve">✓ Approve</button>
+      <button class="btn btn-approve-add" id="btn-approve-add" title="Save this clip and pick another segment from the same candidate">✓ + Another</button>
+      <button class="btn btn-skip" id="btn-skip">✗ Skip</button>
+      <button class="btn btn-next" id="btn-next">→ Next</button>
+      <button class="btn btn-edit" id="btn-clip-edit" title="Adjust centering and footage options">✏ Edit</button>
+      <button class="btn btn-split" id="btn-split" title="Split clip at current playhead position">✂ Split here</button>
+    </div>
+
+  </div><!-- /panel-center -->
+
+  <!-- ─── Right: Approved list ─── -->
+  <div id="panel-right">
+    <h2>Approved</h2>
+    <div id="approved-preview-section">
+      <div id="approved-preview-inner">
+        <canvas id="approved-preview-canvas" width="144" height="256"></canvas>
+        <div id="approved-preview-right">
+          <div id="approved-preview-meta"></div>
+          <div id="approved-trim">
+            <div class="atrim-row">
+              <span class="atrim-label">In</span>
+              <input type="range" id="atrim-start" min="0" max="100" step="0.1">
+              <span class="atrim-val" id="atrim-start-val">0:00</span>
+            </div>
+            <div id="atrim-strip"><div id="atrim-win"></div><div id="atrim-peak"></div></div>
+            <div class="atrim-row">
+              <span class="atrim-label">Out</span>
+              <input type="range" id="atrim-end" min="0" max="100" step="0.1">
+              <span class="atrim-val" id="atrim-end-val">0:00</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="approved-list"></div>
+    <div id="render-footer">
+      <button class="btn btn-render" id="btn-render">🎬 Render All</button>
+      <div id="render-status"></div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<!-- ─── Modal: Change VOD ─── -->
+<div id="modal-vod" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>Select VOD</h2>
+      <button class="modal-close" id="btn-vod-close">✕</button>
+    </div>
+    <div class="vod-type-row">
+      <label class="radio-label"><input type="radio" name="vod-type" value="twitch" checked> Twitch VOD ID</label>
+      <label class="radio-label"><input type="radio" name="vod-type" value="local"> Local .mp4 file path</label>
+    </div>
+    <input type="text" id="vod-input" class="text-input" placeholder="e.g. 2760106149  or  /Users/…/file.mp4">
+    <div id="vod-msg" class="modal-msg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-vod-cancel">Cancel</button>
+      <button class="btn btn-primary" id="btn-vod-confirm">Set VOD</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Progress (detect) ─── -->
+<div id="modal-detect" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header"><h2>🔍 Detecting Moments</h2></div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-track"><div id="detect-bar" class="progress-bar-fill indeterminate"></div></div>
+    </div>
+    <div id="detect-step" class="progress-step">Starting…</div>
+    <div id="detect-log"  class="progress-log"></div>
+    <div id="detect-result" class="progress-result"></div>
+    <div class="modal-actions" id="detect-done-actions" style="display:none">
+      <button class="btn btn-primary" id="btn-detect-reload">Reload Candidates</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Render variant picker ─── -->
+<div id="modal-render" class="modal-overlay" style="display:none">
+  <div class="modal-box modal-wide">
+    <div class="modal-header">
+      <h2>🎬 Export</h2>
+      <button class="modal-close" id="btn-render-close">✕</button>
+    </div>
+    <div id="export-options">
+      <label class="export-opt checked" id="opt-raw">
+        <input type="checkbox" id="exp-raw" checked>
+        <div><div class="export-opt-name">✂ Raw cut</div>
+             <div class="export-opt-desc">Stream copy — original resolution, no processing</div></div>
+      </label>
+      <label class="export-opt checked" id="opt-full-frame">
+        <input type="checkbox" id="exp-full-frame" checked>
+        <div><div class="export-opt-name">🖼 Full frame</div>
+             <div class="export-opt-desc">Entire 16:9 frame → 9:16 with gaussian blur fill</div></div>
+      </label>
+      <label class="export-opt checked" id="opt-gameplay">
+        <input type="checkbox" id="exp-gameplay" checked>
+        <div><div class="export-opt-name">🎮 Gameplay</div>
+             <div class="export-opt-desc">Green crop box → 9:16 with blur fill (no webcam).</div>
+             <div class="export-warn" id="gameplay-warn" style="display:none">⚠ No gameplay box set — draw the green box in Edit first</div></div>
+      </label>
+      <label class="export-opt checked" id="opt-fill">
+        <input type="checkbox" id="exp-fill" checked>
+        <div><div class="export-opt-name">🎯 Fill</div>
+             <div class="export-opt-desc">Webcam (top) + gameplay (bottom), both with blur fill. Draw both boxes in Edit → Fill mode.</div>
+             <div class="export-warn" id="fill-warn" style="display:none">⚠ Both boxes required — open Edit, use Fill mode and draw the purple (webcam) and green (gameplay) boxes</div></div>
+      </label>
+      <label class="export-opt checked" id="opt-dual">
+        <input type="checkbox" id="exp-dual" checked>
+        <div><div class="export-opt-name">📺 Dual</div>
+             <div class="export-opt-desc">Two crop boxes stacked 50/50, each with blur fill. Set them in Edit → Dual mode.</div>
+             <div class="export-warn" id="dual-warn" style="display:none">⚠ Both crop boxes required — open Edit and use Dual mode first</div></div>
+      </label>
+      <label class="export-opt" id="opt-music" style="border-color:#a855f7;margin-top:4px">
+        <input type="checkbox" id="exp-music" style="accent-color:#a855f7">
+        <div><div class="export-opt-name" style="color:#c084fc">🎵 Add music</div>
+             <div class="export-opt-desc">Applies to Full frame, Fill and Dual — not Raw</div></div>
+      </label>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#9ca3af">
+        <span>Subtitle position</span>
+        <div style="display:flex;gap:4px">
+          <button class="subs-pos-btn" data-frac="0.25" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Top</button>
+          <button class="subs-pos-btn" data-frac="0.50" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Middle</button>
+          <button class="subs-pos-btn active" data-frac="0.75" style="background:#6366f1;color:#fff;border:1px solid #6366f1;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Bottom</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inline progress (shown during render) -->
+    <div id="render-inline-progress" class="render-status-inline" style="display:none">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track"><div id="render-bar" class="progress-bar-fill indeterminate"></div></div>
+      </div>
+      <div id="render-step" class="progress-step">Starting…</div>
+      <div id="render-log"  class="progress-log"></div>
+      <div id="render-result" class="progress-result"></div>
+    </div>
+
+    <div class="modal-actions" id="render-modal-actions">
+      <button class="btn btn-ghost" id="btn-render-cancel-modal">Cancel</button>
+      <button class="btn btn-green" id="btn-render-go">🎬 Start Render</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Clip edit (centering + layout mode) ─── -->
+<div id="modal-clip-edit" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>✏ Frame Adjustments</h2>
+      <button class="modal-close" id="btn-edit-close">✕</button>
+    </div>
+
+    <!-- Crop boxes: all 3 always visible and draggable -->
+    <div class="section-label">Crop boxes <span style="font-weight:400;text-transform:none;font-size:10px;color:#6b7280">— drag to move · drag corners to resize · all saved together</span></div>
+    <canvas id="edit-video-canvas" width="452" height="254"></canvas>
+    <div style="display:flex;gap:14px;font-size:11px;color:#9ca3af;margin:4px 0 8px;flex-wrap:wrap">
+      <span><span style="color:#6366f1;font-weight:700">■</span> Webcam — fill top</span>
+      <span><span style="color:#22c55e;font-weight:700">■</span> Gameplay — fill bottom &amp; dual ▲</span>
+      <span><span style="color:#f59e0b;font-weight:700">■</span> Dual ▼</span>
+    </div>
+    <!-- Hidden sliders kept for JS compatibility -->
+    <div id="edit-sliders-wrap" style="display:none">
+    <div class="edit-sliders">
+      <div class="edit-row">
+        <label>Zoom</label>
+        <input type="range" id="edit-zoom" min="1" max="3" step="0.05" value="1">
+        <span class="edit-val" id="edit-zoom-val">1.0×</span>
+      </div>
+      <div class="edit-row">
+        <label>Left / Right</label>
+        <input type="range" id="edit-cx" min="0" max="1" step="0.01" value="0.5">
+        <span class="edit-val" id="edit-cx-val">0.50</span>
+      </div>
+      <div class="edit-row">
+        <label>Top / Bottom</label>
+        <input type="range" id="edit-cy" min="0" max="1" step="0.01" value="0.5">
+        <span class="edit-val" id="edit-cy-val">0.50</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="btn-edit-reset" style="align-self:flex-start">Reset</button>
+    </div>
+    </div><!-- /edit-sliders-wrap -->
+
+    <hr class="modal-divider">
+    <div class="section-label">Sound effect</div>
+    <label class="layout-opt" style="cursor:pointer;margin-bottom:0">
+      <input type="checkbox" id="edit-discord" style="accent-color:#6366f1;width:16px;height:16px;flex-shrink:0">
+      <div class="layout-opt-icon">🔔</div>
+      <div class="layout-opt-text">
+        <div class="layout-opt-name">Discord ping at start</div>
+        <div class="layout-opt-desc">Short notification sound at the beginning of the clip</div>
+      </div>
+    </label>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-edit-cancel">Cancel</button>
+      <button class="btn btn-ghost" id="btn-edit-apply-all" title="Apply these crop boxes to every approved clip">Apply to all</button>
+      <button class="btn btn-primary" id="btn-edit-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Transcript review ─── -->
+<div id="modal-transcript" class="modal-overlay" style="display:none">
+  <div class="modal-box modal-transcript-box">
+    <div class="modal-header">
+      <h2>📝 Edit Transcript</h2>
+      <span id="tr-info" style="font-size:11px;color:#9ca3af;margin-left:8px"></span>
+      <button class="modal-close" id="btn-tr-close">✕</button>
+    </div>
+    <div id="tr-player-wrap">
+      <video id="tr-player" controls></video>
+    </div>
+    <div id="tr-fulltext" class="transcript-fulltext">
+      <span style="color:#6b7280;font-style:italic">Loading transcript…</span>
+    </div>
+    <div style="font-size:11px;color:#6b7280;margin-top:8px">
+      Click a word to jump to it · Edit any word inline · Backspace on empty word removes it
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-tr-cancel">Cancel</button>
+      <button class="btn btn-primary" id="btn-tr-save">💾 Save changes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ── Scene layout config (injected from server) ────────────────────
+const SCENES = {{ scenes | tojson }};
+
+// ── Color conversion ──────────────────────────────────────────────
+function assToHtml(ass) {
+  const h = ass.replace(/&H\d{2}/i, '');
+  return '#' + h.slice(4, 6) + h.slice(2, 4) + h.slice(0, 2);
+}
+function htmlToAss(hex) {
+  const r = hex.slice(1, 3), g = hex.slice(3, 5), b = hex.slice(5, 7);
+  return ('&H00' + b + g + r).toUpperCase();
+}
+
+// ── Time helpers ──────────────────────────────────────────────────
+function fmtTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toFixed(2).padStart(5, '0')}`;
+}
+function fmtTimeSimple(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+function starsHtml(score) {
+  const full = Math.min(5, Math.round(score));
+  return '●'.repeat(full) + '○'.repeat(Math.max(0, 5 - full));
+}
+
+// ── State ─────────────────────────────────────────────────────────
+const VOD_ID = "{{ vod_id }}";
+let state = {
+  candidates: [],
+  approved: [],
+  selectedIdx: -1,   // index into candidates[]
+  videoDuration: 0,
+  trimMin: 0,
+  trimMax: 0,
+  trimStart: 0,
+  trimEnd: 0,
+  peak: 0,
+  cropBox: null,     // {x,y,w,h} as fractions, or null
+  faceCenter: {x: 0.5, y: 0.5, zoom: 1.0},  // per-clip centering + zoom
+  editCamBox:   null,   // per-clip webcam region override {x,y,w,h} fractions
+  editGameBox:  null,   // per-clip gameplay region override (top) {x,y,w,h} fractions
+  editGameBox2: null,   // per-clip gameplay2 region override (bottom) {x,y,w,h} fractions
+  discordSound: false,  // per-clip Discord ping at start
+  layoutMode: 'face_only',   // 'face_only' | 'include_gameplay' | 'dual_screen'
+  chatMsgs: [],      // [{user,text,offset_sec,score}]
+  selectedMsg: null, // {user,text,offset_sec} or null
+  subs: {
+    font_size: 90,
+    primary_color: "&H00FFFFFF",
+    highlight_color: "&H0000FFFF",
+    position_y_frac: 0.75,
+    max_words_per_line: 4,
+    all_caps: true,
+  },
+};
+let renderPollTimer = null;
+let detectPollTimer = null;
+
+// ── DOM refs ──────────────────────────────────────────────────────
+const player       = document.getElementById('player');
+const candList     = document.getElementById('candidate-list');
+const approvedList = document.getElementById('approved-list');
+const trimStartEl  = document.getElementById('trim-start');
+const trimEndEl    = document.getElementById('trim-end');
+const trimStartLbl = document.getElementById('trim-start-label');
+const trimEndLbl   = document.getElementById('trim-end-label');
+const timelineWin  = document.getElementById('timeline-window');
+const timelinePeak = document.getElementById('timeline-peak');
+const timelineHead = document.getElementById('timeline-playhead');
+const renderStatus = document.getElementById('render-status');
+const detectStatus = document.getElementById('detect-status');
+const noCandiates  = document.getElementById('no-candidates');
+
+// Subs inputs
+const subsSize     = document.getElementById('subs-size');
+const subsSizeVal  = document.getElementById('subs-size-val');
+const subsPrimary  = document.getElementById('subs-primary');
+const subsHigh     = document.getElementById('subs-highlight');
+const subsPos      = document.getElementById('subs-pos');
+const subsPosVal   = document.getElementById('subs-pos-val');
+const subsWords    = document.getElementById('subs-words');
+const subsCaps     = document.getElementById('subs-caps');
+
+// ── Initial load ──────────────────────────────────────────────────
+async function loadState() {
+  const resp = await fetch('/api/state');
+  const data = await resp.json();
+  state.candidates = data.candidates || [];
+  state.approved   = data.approved   || [];
+
+  if (state.candidates.length === 0) {
+    noCandiates.style.display = 'flex';
+    document.getElementById('panel-left').style.display = 'none';
+  } else {
+    noCandiates.style.display = 'none';
+    document.getElementById('panel-left').style.display = 'flex';
+  }
+
+  renderCandidateList();
+  renderApprovedList();
+  updateHeaderCount();
+
+  if (state.candidates.length > 0 && state.selectedIdx < 0) {
+    selectCandidate(0);
+  }
+}
+
+// ── Candidate list ────────────────────────────────────────────────
+function isApproved(cand) {
+  return state.approved.some(a => Math.abs(a.peak_sec - cand.peak_sec) < 0.01);
+}
+
+function renderCandidateList() {
+  candList.innerHTML = '';
+  state.candidates.forEach((c, i) => {
+    const div = document.createElement('div');
+    div.className = 'cand-card' + (isApproved(c) ? ' approved-mark' : '') + (i === state.selectedIdx ? ' selected' : '');
+    div.dataset.idx = i;
+    div.innerHTML = `
+      <div class="cand-header">
+        <span class="cand-num">#${i + 1}</span>
+        <span class="cand-time">${fmtTimeSimple(c.start_sec)}–${fmtTimeSimple(c.end_sec)}</span>
+        <span class="cand-stars">${starsHtml(c.score || 0)}</span>
+      </div>
+      <div class="cand-reasons">${(c.reasons || []).slice(0,3).join(' · ')}</div>
+    `;
+    div.addEventListener('click', () => selectCandidate(i));
+    candList.appendChild(div);
+  });
+}
+
+function selectCandidate(idx, forceApprovedClip = null) {
+  if (idx < 0 || idx >= state.candidates.length) return;
+  state.selectedIdx = idx;
+  const c = state.candidates[idx];
+
+  // Highlight selected card and keep it visible in the left panel
+  document.querySelectorAll('.cand-card').forEach((el, i) => {
+    el.classList.toggle('selected', i === idx);
+  });
+  const card = candList.querySelector(`[data-idx="${idx}"]`);
+  if (card) card.scrollIntoView({ block: 'nearest' });
+
+  // Reveal all editor sections
+  document.getElementById('video-area').style.display = 'block';
+  document.getElementById('trim-section').style.display = 'block';
+  document.getElementById('subs-section').style.display = 'block';
+  document.getElementById('transcript-section').style.display = 'block';
+  document.getElementById('chat-section').style.display = 'block';
+  document.getElementById('action-bar').style.display = 'flex';
+  document.getElementById('panel-center').scrollTop = 0;
+
+  // Load per-clip edit settings (from approved entry if present, else candidate)
+  const editSrc = forceApprovedClip || state.approved.find(a => Math.abs(a.peak_sec - c.peak_sec) < 0.01) || c;
+  state.editingApprovedPeak = forceApprovedClip ? forceApprovedClip.peak_sec : (editSrc !== c ? editSrc.peak_sec : null);
+
+  state.faceCenter = editSrc.face_center ? {...editSrc.face_center} : {x: 0.5, y: 0.5, zoom: 1.0};
+  if (state.faceCenter.zoom === undefined) state.faceCenter.zoom = 1.0;
+  const _defCam   = (SCENES['scene_b'] || Object.values(SCENES)[0] || {}).webcam    || {x:0,y:0,w:0.57,h:1};
+  const _defGame  = (SCENES['scene_a'] || Object.values(SCENES)[0] || {}).gameplay  || {x:0.31,y:0,w:0.47,h:1};
+  const _defGame2 = (SCENES['scene_a'] || Object.values(SCENES)[0] || {}).gameplay2 || {x:0.2128,y:0.5,w:0.7872,h:0.5};
+  state.editCamBox   = editSrc.cam_crop   ? {...editSrc.cam_crop}   : {..._defCam};
+  state.editGameBox  = editSrc.game_crop  ? {...editSrc.game_crop}  : {..._defGame};
+  state.editGameBox2 = editSrc.game_crop2 ? {...editSrc.game_crop2} : {..._defGame2};
+  state.discordSound = editSrc.discord_sound === true;
+
+  // Show approved preview panel only when this clip is already approved
+  const isApprovedClip = !!state.approved.find(a => Math.abs(a.peak_sec - editSrc.peak_sec) < 0.01);
+  showApprovedPreview(isApprovedClip);
+  state.layoutMode = editSrc.layout_mode || 'face_only';
+
+  const existingApproved = state.approved.find(
+    a => Math.abs(a.peak_sec - editSrc.peak_sec) < 0.01);
+  resetTranscript(existingApproved ? existingApproved.words : (c.words || null));
+  loadSubsFromClip(editSrc);
+
+  // ── Video seek ────────────────────────────────────────────────────
+  state.peak = c.peak_sec;
+  const videoSrc = `/video/${VOD_ID}`;
+
+  // Only reload the src when the VOD changes; endsWith handles absolute→relative.
+  if (!player.src || !player.src.endsWith(videoSrc)) {
+    player.src = videoSrc;
+    player.load();
+  }
+
+  const doSeek = () => { player.currentTime = c.peak_sec; };
+  const setupTrim = () => {
+    const dur = player.duration;
+    if (!isFinite(dur) || dur <= 0) return;
+    state.videoDuration = dur;
+    const trimMin = Math.max(0, c.start_sec - 30);
+    const trimMax = Math.min(dur, c.end_sec + 30);
+    state.trimMin = trimMin; state.trimMax = trimMax;
+    const existing = state.approved.find(
+      a => Math.abs(a.peak_sec - c.peak_sec) < 0.01);
+    state.trimStart = existing ? existing.start_sec : c.start_sec;
+    state.trimEnd   = existing ? existing.end_sec   : c.end_sec;
+    trimStartEl.min = trimMin; trimStartEl.max = trimMax; trimStartEl.step = 0.01;
+    trimEndEl.min   = trimMin; trimEndEl.max   = trimMax; trimEndEl.step   = 0.01;
+    trimStartEl.value = state.trimStart;
+    trimEndEl.value   = state.trimEnd;
+    updateTrimLabels();
+    updateTimeline();
+  };
+
+  if (player.readyState >= 1) {
+    doSeek();
+    setupTrim();
+  } else {
+    player.addEventListener('loadedmetadata', () => { doSeek(); setupTrim(); }, { once: true });
+  }
+
+  // ── Chat messages ─────────────────────────────────────────────────
+  loadChatMessages(c.peak_sec, c);
+}
+
+// ── Subs handling ─────────────────────────────────────────────────
+function loadSubsFromClip(c) {
+  const subs = c.subs || {};
+  state.subs = {
+    font_size:         subs.font_size        ?? 90,
+    primary_color:     subs.primary_color    ?? "&H00FFFFFF",
+    highlight_color:   subs.highlight_color  ?? "&H0000FFFF",
+    position_y_frac:   subs.position_y_frac  ?? 0.75,
+    max_words_per_line: subs.max_words_per_line ?? 4,
+    all_caps:          subs.all_caps         ?? true,
+  };
+
+  // Push to DOM
+  subsSize.value    = state.subs.font_size;
+  subsSizeVal.textContent = state.subs.font_size;
+  subsPrimary.value = assToHtml(state.subs.primary_color);
+  subsHigh.value    = assToHtml(state.subs.highlight_color);
+  subsPos.value     = state.subs.position_y_frac;
+  subsPosVal.textContent = state.subs.position_y_frac;
+  subsWords.value   = state.subs.max_words_per_line;
+  subsCaps.checked  = state.subs.all_caps;
+
+  updateSubsPreview();
+}
+
+function collectSubs() {
+  return {
+    font_size:          parseInt(subsSize.value, 10),
+    primary_color:      htmlToAss(subsPrimary.value),
+    highlight_color:    htmlToAss(subsHigh.value),
+    position_y_frac:    parseFloat(subsPos.value),
+    max_words_per_line: parseInt(subsWords.value, 10),
+    all_caps:           subsCaps.checked,
+  };
+}
+
+function updateSubsPreview() {
+  const primaryHex = subsPrimary.value;
+  const highHex    = subsHigh.value;
+  const size       = parseInt(subsSize.value, 10);
+  const caps       = subsCaps.checked;
+  const displaySize = Math.round(size * 0.3);
+
+  const words = caps
+    ? ['SAMPLE', 'ACTIVE', 'TEXT']
+    : ['Sample', 'Active', 'Text'];
+
+  const pt = document.getElementById('preview-text');
+  pt.innerHTML = words.map((w, i) => {
+    const color = (i === 1) ? highHex : primaryHex;
+    return `<span class="preview-word" style="color:${color}">${w}</span>`;
+  }).join(' ');
+  pt.style.fontSize = displaySize + 'px';
+}
+
+// ── Subs event listeners ──────────────────────────────────────────
+subsSize.addEventListener('input', () => {
+  subsSizeVal.textContent = subsSize.value;
+  state.subs.font_size = parseInt(subsSize.value, 10);
+  updateSubsPreview();
+});
+subsPrimary.addEventListener('input', () => {
+  state.subs.primary_color = htmlToAss(subsPrimary.value);
+  updateSubsPreview();
+});
+subsHigh.addEventListener('input', () => {
+  state.subs.highlight_color = htmlToAss(subsHigh.value);
+  updateSubsPreview();
+});
+subsPos.addEventListener('input', () => {
+  subsPosVal.textContent = parseFloat(subsPos.value).toFixed(2);
+  state.subs.position_y_frac = parseFloat(subsPos.value);
+});
+subsWords.addEventListener('change', () => {
+  state.subs.max_words_per_line = parseInt(subsWords.value, 10);
+});
+subsCaps.addEventListener('change', () => {
+  state.subs.all_caps = subsCaps.checked;
+  updateSubsPreview();
+});
+
+// ── Subtitle section toggle ───────────────────────────────────────
+document.getElementById('subs-toggle').addEventListener('click', () => {
+  const toggle = document.getElementById('subs-toggle');
+  const body   = document.getElementById('subs-body');
+  toggle.classList.toggle('open');
+  body.classList.toggle('open');
+});
+
+// ── Trim sliders ──────────────────────────────────────────────────
+trimStartEl.addEventListener('input', () => {
+  let v = parseFloat(trimStartEl.value);
+  if (v >= state.trimEnd - 0.5) v = state.trimEnd - 0.5;
+  state.trimStart = v;
+  trimStartEl.value = v;
+  updateTrimLabels();
+  updateTimeline();
+});
+trimEndEl.addEventListener('input', () => {
+  let v = parseFloat(trimEndEl.value);
+  if (v <= state.trimStart + 0.5) v = state.trimStart + 0.5;
+  state.trimEnd = v;
+  trimEndEl.value = v;
+  updateTrimLabels();
+  updateTimeline();
+});
+
+function updateTrimLabels() {
+  trimStartLbl.textContent = fmtTime(state.trimStart);
+  trimEndLbl.textContent   = fmtTime(state.trimEnd);
+}
+
+function updateTimeline() {
+  const span = state.trimMax - state.trimMin;
+  if (span <= 0) return;
+  const startPct = (state.trimStart - state.trimMin) / span * 100;
+  const endPct   = (state.trimEnd   - state.trimMin) / span * 100;
+  const peakPct  = (state.peak - state.trimMin) / span * 100;
+
+  timelineWin.style.left  = startPct + '%';
+  timelineWin.style.width = (endPct - startPct) + '%';
+  timelinePeak.style.left = Math.max(0, Math.min(100, peakPct)) + '%';
+}
+
+player.addEventListener('timeupdate', () => {
+  const span = state.trimMax - state.trimMin;
+  if (span <= 0) return;
+  const pct = (player.currentTime - state.trimMin) / span * 100;
+  timelineHead.style.left = Math.max(0, Math.min(100, pct)) + '%';
+});
+
+// Click timeline strip to seek
+document.getElementById('timeline-strip').addEventListener('click', (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct  = (e.clientX - rect.left) / rect.width;
+  const t    = state.trimMin + pct * (state.trimMax - state.trimMin);
+  player.currentTime = Math.max(0, Math.min(state.videoDuration, t));
+});
+
+
+
+
+// ── Split at playhead ─────────────────────────────────────────────
+document.getElementById('btn-split').addEventListener('click', () => {
+  if (state.selectedIdx < 0) return;
+  const c   = state.candidates[state.selectedIdx];
+  const cut = Math.round(player.currentTime * 100) / 100;
+
+  if (cut <= c.start_sec + 0.5 || cut >= c.end_sec - 0.5) {
+    alert('Scrub the video to the point where you want to cut, then click Split.');
+    return;
+  }
+
+  // Keep the peak_sec in whichever half it belongs to
+  const first = {
+    ...c,
+    end_sec:  cut,
+    peak_sec: c.peak_sec < cut ? c.peak_sec : (c.start_sec + cut) / 2,
+  };
+  const second = {
+    ...c,
+    start_sec: cut,
+    peak_sec: c.peak_sec > cut ? c.peak_sec : (cut + c.end_sec) / 2,
+  };
+
+  state.candidates.splice(state.selectedIdx, 1, first, second);
+  renderCandidateList();
+  selectCandidate(state.selectedIdx); // select the first half
+});
+
+
+
+// ── Chat messages ─────────────────────────────────────────────────
+async function loadChatMessages(peak_sec, cand) {
+  const container = document.getElementById('chat-options');
+  const loading   = document.getElementById('chat-loading');
+
+  // Reset
+  container.innerHTML = '';
+  container.appendChild(buildNoneOption());
+  loading.style.display = 'block';
+  container.appendChild(loading);
+
+  state.chatMsgs = [];
+  state.selectedMsg = cand.chat_message || null;
+
+  try {
+    const resp = await fetch(`/api/messages?peak_sec=${encodeURIComponent(peak_sec)}`);
+    const msgs = await resp.json();
+    state.chatMsgs = msgs;
+    loading.style.display = 'none';
+
+    if (msgs.length === 0) {
+      loading.textContent = 'No chat messages found in this window.';
+      loading.style.display = 'block';
+    } else {
+      msgs.forEach((m, i) => {
+        const opt = document.createElement('div');
+        opt.className = 'chat-option';
+        opt.innerHTML = `
+          <input type="radio" name="chat-msg" value="${i}" id="radio-${i}">
+          <div style="flex:1;min-width:0">
+            <div class="chat-meta"><span class="chat-user">${escHtml(m.user)}</span> · ${fmtTimeSimple(m.offset_sec)}</div>
+            <div class="chat-text">${escHtml(m.text)}</div>
+          </div>
+          ${m.score > 0 ? `<span class="chat-score">${m.score.toFixed(0)}</span>` : ''}
+        `;
+        const radio = opt.querySelector('input[type="radio"]');
+        radio.addEventListener('change', () => {
+          if (radio.checked) state.selectedMsg = m;
+        });
+        // Check if this matches the existing chat_message
+        if (state.selectedMsg && state.selectedMsg.user === m.user &&
+            Math.abs(state.selectedMsg.offset_sec - m.offset_sec) < 0.1) {
+          radio.checked = true;
+        }
+        container.appendChild(opt);
+      });
+    }
+  } catch (e) {
+    loading.textContent = 'Failed to load messages.';
+    loading.style.display = 'block';
+  }
+}
+
+function buildNoneOption() {
+  const opt = document.createElement('div');
+  opt.className = 'chat-option';
+  opt.id = 'chat-none-opt';
+  opt.innerHTML = `<input type="radio" name="chat-msg" value="none" id="radio-none"><label for="radio-none" style="cursor:pointer;flex:1">No overlay</label>`;
+  const radio = opt.querySelector('input');
+  radio.addEventListener('change', () => {
+    if (radio.checked) state.selectedMsg = null;
+  });
+  // Default: if no selectedMsg, check none
+  if (!state.selectedMsg) radio.checked = true;
+  return opt;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Approve / Skip ────────────────────────────────────────────────
+async function approveCurrentClip() {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const subs = collectSubs();
+
+  const payload = {
+    start_sec:    state.trimStart,
+    end_sec:      state.trimEnd,
+    peak_sec:     state.editingApprovedPeak !== null ? state.editingApprovedPeak : c.peak_sec,
+    candidate_peak: c.peak_sec,
+    score:        c.score,
+    reasons:      c.reasons || [],
+    subs:         subs,
+    face_center:   {...state.faceCenter},
+    cam_crop:      state.editCamBox   ? {...state.editCamBox}   : undefined,
+    game_crop:     state.editGameBox  ? {...state.editGameBox}  : undefined,
+    game_crop2:    state.editGameBox2 ? {...state.editGameBox2} : undefined,
+    discord_sound: state.discordSound,
+  };
+  const cb = state.cropBox && state.cropBox.w > 0.01 ? state.cropBox : {x: 0, y: 0, w: 1, h: 1};
+  payload.crop = { ...cb };
+  if (state.selectedMsg) {
+    payload.chat_message = {
+      user:       state.selectedMsg.user,
+      text:       state.selectedMsg.text,
+      offset_sec: state.selectedMsg.offset_sec,
+    };
+  }
+  if (transcriptWords.length > 0) {
+    payload.words = transcriptWords.map(w => ({
+      text: w.text, start: w.start, end: w.end,
+      ...(w.censored       ? {censored: true}                    : {}),
+      ...(w.original_text  ? {original_text: w.original_text}    : {}),
+    }));
+  }
+
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  // Refresh
+  const resp = await fetch('/api/state');
+  const data = await resp.json();
+  state.approved = data.approved;
+  renderApprovedList();
+  renderCandidateList();
+  updateHeaderCount();
+  // Show preview for the just-approved clip
+  if (state.selectedIdx >= 0) {
+    const c = state.candidates[state.selectedIdx];
+    const approved = state.approved.find(a => Math.abs(a.peak_sec - c.peak_sec) < 0.01);
+    if (approved) showApprovedPreview(true);
+  }
+}
+
+async function unapproveClip(peak_sec) {
+  await fetch('/api/unapprove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ peak_sec }),
+  });
+  const resp = await fetch('/api/state');
+  const data = await resp.json();
+  state.approved = data.approved;
+  renderApprovedList();
+  renderCandidateList();
+  updateHeaderCount();
+  // Hide preview if no approved clip is currently selected
+  if (state.selectedIdx >= 0) {
+    const c = state.candidates[state.selectedIdx];
+    const stillApproved = state.approved.some(a => Math.abs(a.peak_sec - c.peak_sec) < 0.01);
+    showApprovedPreview(stillApproved);
+  } else {
+    showApprovedPreview(false);
+  }
+}
+
+// ── Approved list ─────────────────────────────────────────────────
+function renderApprovedList() {
+  approvedList.innerHTML = '';
+  state.approved.forEach((a, i) => {
+    const div = document.createElement('div');
+    div.className = 'approved-card';
+    // Check if this is the currently selected candidate
+    if (state.selectedIdx >= 0) {
+      const sel = state.candidates[state.selectedIdx];
+      if (sel && Math.abs(sel.peak_sec - a.peak_sec) < 0.01) {
+        div.classList.add('selected');
+      }
+    }
+    const hasWords = a.words && a.words.length > 0;
+    div.innerHTML = `
+      <span class="approved-num">#${i + 1}</span>
+      <span class="approved-time">${fmtTimeSimple(a.start_sec)}–${fmtTimeSimple(a.end_sec)}</span>
+      <button class="approved-export-btn" title="Export this clip only" data-peak="${a.peak_sec}">🎬</button>
+      <button class="approved-tr-btn" title="Edit transcript" data-peak="${a.peak_sec}">📝</button>
+      <button class="approved-remove" title="Remove" data-peak="${a.peak_sec}">×</button>
+    `;
+    div.addEventListener('click', (e) => {
+      if (e.target.classList.contains('approved-remove')) return;
+      if (e.target.classList.contains('approved-tr-btn')) return;
+      if (e.target.classList.contains('approved-export-btn')) return;
+      
+      let idx = state.candidates.findIndex(c => Math.abs(c.peak_sec - a.peak_sec) < 0.01);
+      if (idx < 0 && a.candidate_peak !== undefined) {
+        idx = state.candidates.findIndex(c => Math.abs(c.peak_sec - a.candidate_peak) < 0.01);
+      }
+      if (idx < 0) {
+        idx = state.candidates.findIndex(c => a.peak_sec >= c.start_sec && a.peak_sec <= c.end_sec);
+      }
+      if (idx < 0) {
+        let bestDist = Infinity;
+        state.candidates.forEach((c, i) => {
+          const dist = Math.abs(c.peak_sec - a.peak_sec);
+          if (dist < bestDist) { bestDist = dist; idx = i; }
+        });
+      }
+      if (idx >= 0) selectCandidate(idx, a);
+    });
+    div.querySelector('.approved-export-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRenderModal(a.peak_sec);
+    });
+    div.querySelector('.approved-tr-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openTranscriptModal(a);
+    });
+    div.querySelector('.approved-remove').addEventListener('click', () => {
+      unapproveClip(a.peak_sec);
+    });
+    approvedList.appendChild(div);
+  });
+}
+
+// ── Button handlers ───────────────────────────────────────────────
+document.getElementById('btn-approve').addEventListener('click', async () => {
+  await approveCurrentClip();
+  advanceToNext();
+});
+
+document.getElementById('btn-approve-add').addEventListener('click', async () => {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+
+  // Use trim midpoint as peak_sec so each sub-clip is unique in approved.json
+  const subPeak = parseFloat(((state.trimStart + state.trimEnd) / 2).toFixed(3));
+  const subs = collectSubs();
+
+  const payload = {
+    start_sec:   state.trimStart,
+    end_sec:     state.trimEnd,
+    peak_sec:    subPeak,
+    candidate_peak: c.peak_sec,
+    score:       c.score,
+    reasons:     c.reasons || [],
+    subs,
+    face_center:   {...state.faceCenter},
+    cam_crop:      state.editCamBox   ? {...state.editCamBox}   : undefined,
+    game_crop:     state.editGameBox  ? {...state.editGameBox}  : undefined,
+    game_crop2:    state.editGameBox2 ? {...state.editGameBox2} : undefined,
+    discord_sound: state.discordSound,
+  };
+  const cb = state.cropBox && state.cropBox.w > 0.01 ? state.cropBox : {x: 0, y: 0, w: 1, h: 1};
+  payload.crop = { ...cb };
+  if (state.selectedMsg) payload.chat_message = {
+    user: state.selectedMsg.user, text: state.selectedMsg.text,
+    offset_sec: state.selectedMsg.offset_sec,
+  };
+  if (transcriptWords.length > 0) payload.words = transcriptWords.map(w => ({
+    text: w.text, start: w.start, end: w.end,
+    ...(w.censored      ? {censored: true}                 : {}),
+    ...(w.original_text ? {original_text: w.original_text} : {}),
+  }));
+
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await fetch('/api/state').then(r => r.json());
+  state.approved = data.approved;
+  renderApprovedList();
+  renderCandidateList();
+  updateHeaderCount();
+
+  // Reset trim to the full candidate range so the user can pick a new segment
+  const dur = player.duration;
+  if (isFinite(dur) && dur > 0) {
+    const trimMin = Math.max(0, c.start_sec - 30);
+    const trimMax = Math.min(dur, c.end_sec + 30);
+    state.trimMin = trimMin; state.trimMax = trimMax;
+    state.trimStart = c.start_sec; state.trimEnd = c.end_sec;
+    trimStartEl.min = trimMin; trimStartEl.max = trimMax; trimStartEl.step = 0.01;
+    trimEndEl.min   = trimMin; trimEndEl.max   = trimMax; trimEndEl.step   = 0.01;
+    trimStartEl.value = state.trimStart;
+    trimEndEl.value   = state.trimEnd;
+    updateTrimLabels();
+    updateTimeline();
+  }
+});
+
+document.getElementById('btn-skip').addEventListener('click', () => {
+  advanceToNext();
+});
+
+document.getElementById('btn-next').addEventListener('click', () => {
+  selectCandidate(state.selectedIdx + 1);
+});
+
+function advanceToNext() {
+  for (let i = state.selectedIdx + 1; i < state.candidates.length; i++) {
+    if (!isApproved(state.candidates[i])) {
+      selectCandidate(i);
+      return;
+    }
+  }
+  // All remaining approved or end — just go next
+  selectCandidate(state.selectedIdx + 1);
+}
+
+// ── Keyboard shortcuts ────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  // Don't intercept when typing in an input or contenteditable
+  if (['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
+
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const delta = e.key === 'ArrowLeft' ? -1 : 1;
+    selectCandidate(state.selectedIdx + delta);
+  } else if (e.key === 'y' || e.key === 'Y') {
+    e.preventDefault();
+    approveCurrentClip().then(advanceToNext);
+  } else if (e.key === 'n' || e.key === 'N') {
+    e.preventDefault();
+    advanceToNext();
+  }
+});
+
+// ── Render button → opens export modal ───────────────────────────
+document.getElementById('btn-render').addEventListener('click', () => {
+  if (state.approved.length === 0) {
+    renderStatus.textContent = 'No approved clips to render.';
+    return;
+  }
+  openRenderModal();
+});
+
+// ── Render modal ──────────────────────────────────────────────────
+let renderLogOffset = 0;
+let renderSoloPeakSec = null;
+
+// Subtitle position selector
+let _subsYFrac = 0.75;
+document.querySelectorAll('.subs-pos-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _subsYFrac = parseFloat(btn.dataset.frac);
+    document.querySelectorAll('.subs-pos-btn').forEach(b => {
+      const active = b === btn;
+      b.style.background = active ? '#6366f1' : '#374151';
+      b.style.color = active ? '#fff' : '#f9fafb';
+      b.style.borderColor = active ? '#6366f1' : '#4b5563';
+    });
+  });
+});
+
+// Wire up export option toggle behaviour
+['raw','full-frame','gameplay','fill','dual','music'].forEach(id => {
+  const lbl = document.getElementById('opt-' + id);
+  const cb  = document.getElementById('exp-' + id);
+  lbl.addEventListener('click', e => {
+    if (e.target === cb) return;
+    cb.checked = !cb.checked;
+    lbl.classList.toggle('checked', cb.checked);
+  });
+  cb.addEventListener('change', () => lbl.classList.toggle('checked', cb.checked));
+});
+
+function _getClipForSolo() {
+  if (renderSoloPeakSec === null) return null;
+  return state.approved.find(c => Math.abs(c.peak_sec - renderSoloPeakSec) < 0.01) || null;
+}
+
+function openRenderModal(soloPeakSec = null) {
+  renderSoloPeakSec = soloPeakSec;
+  document.getElementById('modal-render').style.display = 'flex';
+  document.getElementById('render-inline-progress').style.display = 'none';
+  document.getElementById('render-result').textContent = '';
+  document.getElementById('render-modal-actions').style.display = 'flex';
+  document.getElementById('btn-render-go').disabled = false;
+
+  // Show crop warnings for solo renders where crop boxes are missing
+  const clip = _getClipForSolo();
+  const hasGameplay = clip ? !!clip.game_crop : true;
+  const hasFill     = clip ? !!(clip.game_crop && clip.cam_crop) : true;
+  const hasDual     = clip ? !!(clip.game_crop && clip.game_crop2) : true;
+  document.getElementById('gameplay-warn').style.display = hasGameplay ? 'none' : 'block';
+  document.getElementById('fill-warn').style.display     = hasFill     ? 'none' : 'block';
+  document.getElementById('dual-warn').style.display     = hasDual     ? 'none' : 'block';
+}
+
+document.getElementById('btn-render-close').addEventListener('click', closeRenderModal);
+document.getElementById('btn-render-cancel-modal').addEventListener('click', closeRenderModal);
+function closeRenderModal() {
+  if (renderPollTimer) { clearInterval(renderPollTimer); renderPollTimer = null; }
+  document.getElementById('modal-render').style.display = 'none';
+}
+
+document.getElementById('btn-render-go').addEventListener('click', async () => {
+  const music = document.getElementById('exp-music').checked;
+  const selected = [];
+  if (document.getElementById('exp-raw').checked)        selected.push('raw');
+  if (document.getElementById('exp-full-frame').checked) selected.push(music ? 'full_frame_music' : 'full_frame');
+  if (document.getElementById('exp-gameplay').checked)   selected.push(music ? 'gameplay_music' : 'gameplay');
+  if (document.getElementById('exp-fill').checked)       selected.push(music ? 'fill_music' : 'fill');
+  if (document.getElementById('exp-dual').checked)       selected.push(music ? 'dual_music' : 'dual');
+  if (selected.length === 0) { alert('Select at least one export type.'); return; }
+
+  const btn = document.getElementById('btn-render-go');
+  btn.disabled = true;
+  renderLogOffset = 0;
+
+  document.getElementById('render-inline-progress').style.display = 'block';
+  document.getElementById('render-result').textContent = '';
+  document.getElementById('render-step').textContent = 'Starting…';
+  document.getElementById('render-log').innerHTML = '';
+
+  const payload = {only_variants: selected.join(','), subs_y_frac: _subsYFrac};
+  if (renderSoloPeakSec !== null) payload.only_clip = renderSoloPeakSec;
+  await fetch('/api/render/start', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload),
+  });
+
+  renderPollTimer = setInterval(pollRenderProgress, 1500);
+});
+
+async function pollRenderProgress() {
+  const [statusResp, logResp] = await Promise.all([
+    fetch('/api/render/status'),
+    fetch(`/api/log?type=render&after=${renderLogOffset}`),
+  ]);
+  const status = await statusResp.json();
+  const logData = await logResp.json();
+
+  if (logData.lines && logData.lines.length) {
+    renderLogOffset += logData.lines.length;
+    appendLog('render-log', 'render-step', logData.lines);
+  }
+
+  if (status.state === 'done') {
+    clearInterval(renderPollTimer); renderPollTimer = null;
+    document.getElementById('render-result').className = 'progress-result ok';
+    document.getElementById('render-result').textContent = '✓ Render complete! Check the out/ folder.';
+    document.getElementById('render-bar').classList.remove('indeterminate');
+    document.getElementById('render-bar').style.width = '100%';
+    renderStatus.textContent = '✓ Done';
+  } else if (status.state === 'error') {
+    clearInterval(renderPollTimer); renderPollTimer = null;
+    document.getElementById('render-result').className = 'progress-result err';
+    document.getElementById('render-result').textContent = `✕ Render failed (exit ${status.exit_code})`;
+    document.getElementById('btn-render-go').disabled = false;
+    renderStatus.textContent = '✕ Failed';
+  }
+}
+
+// ── Transcript review modal ───────────────────────────────────────
+let trModalClip   = null;
+let trModalWords  = [];
+const trPlayer    = document.getElementById('tr-player');
+
+function onTrTimeUpdate() {
+  const clipTime = trPlayer.currentTime - trModalClip.start_sec;
+  // Loop within clip
+  if (trPlayer.currentTime >= trModalClip.end_sec) {
+    trPlayer.currentTime = trModalClip.start_sec;
+    trPlayer.play();
+    return;
+  }
+  // Highlight current word
+  document.querySelectorAll('#tr-fulltext .tw').forEach((span, i) => {
+    const w = trModalWords[i];
+    if (!w) return;
+    span.classList.toggle('playing', clipTime >= w.start && clipTime <= w.end);
+  });
+}
+
+function renderTrFulltext() {
+  const box = document.getElementById('tr-fulltext');
+  box.innerHTML = '';
+  if (trModalWords.length === 0) {
+    box.innerHTML = '<span style="color:#6b7280;font-style:italic">No words found in this clip.</span>';
+    return;
+  }
+  trModalWords.forEach((w, i) => {
+    const span = document.createElement('span');
+    span.className = 'tw';
+    span.contentEditable = 'true';
+    span.spellcheck = false;
+    span.textContent = w.text;
+    span.dataset.idx = i;
+
+    // Click / focus → seek + play
+    span.addEventListener('mousedown', () => {
+      trPlayer.currentTime = trModalClip.start_sec + w.start;
+      trPlayer.play();
+    });
+
+    // Live edit
+    span.addEventListener('input', () => {
+      trModalWords[i].text = span.textContent;
+    });
+
+    // Keyboard: backspace on empty = delete word; Enter = next word
+    span.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && span.textContent === '') {
+        e.preventDefault();
+        trModalWords.splice(i, 1);
+        renderTrFulltext();
+        const spans = document.querySelectorAll('#tr-fulltext .tw');
+        if (spans[i - 1]) spans[i - 1].focus();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const spans = document.querySelectorAll('#tr-fulltext .tw');
+        if (spans[i + 1]) spans[i + 1].focus();
+      }
+    });
+
+    box.appendChild(span);
+    if (i < trModalWords.length - 1) box.appendChild(document.createTextNode(' '));
+  });
+  document.getElementById('tr-info').textContent =
+    `${fmtTimeSimple(trModalClip.start_sec)}–${fmtTimeSimple(trModalClip.end_sec)} · ${trModalWords.length} words`;
+}
+
+async function openTranscriptModal(clip) {
+  trModalClip  = clip;
+  trModalWords = [];
+  document.getElementById('modal-transcript').style.display = 'flex';
+  document.getElementById('tr-fulltext').innerHTML =
+    '<span style="color:#6b7280;font-style:italic">Loading…</span>';
+  document.getElementById('tr-info').textContent = '';
+
+  // Set up player
+  if (trPlayer.src !== `/video/${VOD_ID}`) trPlayer.src = `/video/${VOD_ID}`;
+  trPlayer.currentTime = clip.start_sec;
+  trPlayer.addEventListener('timeupdate', onTrTimeUpdate);
+
+  // Use saved words if available, otherwise transcribe
+  if (clip.words && clip.words.length > 0) {
+    trModalWords = clip.words.map(w => ({...w}));
+    renderTrFulltext();
+  } else {
+    try {
+      const resp = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({start_sec: clip.start_sec, end_sec: clip.end_sec, peak_sec: clip.peak_sec}),
+      });
+      const data = await resp.json();
+      if (data.error) {
+        document.getElementById('tr-fulltext').innerHTML =
+          `<span style="color:#f87171">${data.error}</span>`;
+        return;
+      }
+      trModalWords = data.words;
+      clip.words = trModalWords; // cache locally
+      renderTrFulltext();
+    } catch (e) {
+      document.getElementById('tr-fulltext').innerHTML =
+        `<span style="color:#f87171">${e.message}</span>`;
+    }
+  }
+}
+
+function closeTrModal() {
+  trPlayer.pause();
+  trPlayer.removeEventListener('timeupdate', onTrTimeUpdate);
+  document.getElementById('modal-transcript').style.display = 'none';
+}
+
+document.getElementById('btn-tr-close').addEventListener('click', closeTrModal);
+document.getElementById('btn-tr-cancel').addEventListener('click', closeTrModal);
+
+document.getElementById('btn-tr-save').addEventListener('click', async () => {
+  // Collect current DOM state (user may have typed)
+  document.querySelectorAll('#tr-fulltext .tw').forEach((span, i) => {
+    if (trModalWords[i]) trModalWords[i].text = span.textContent.trim();
+  });
+  trModalWords = trModalWords.filter(w => w.text.length > 0);
+  trModalClip.words = trModalWords;
+
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(trModalClip),
+  });
+
+  // Refresh state
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+  renderApprovedList();
+  updateHeaderCount();
+  closeTrModal();
+});
+
+// ── Transcript / subtitle text editor ────────────────────────────
+let transcriptWords = [];   // [{text, start, end}]
+
+function resetTranscript(existingWords) {
+  transcriptWords = existingWords ? [...existingWords] : [];
+  const statusEl = document.getElementById('transcript-status');
+  if (transcriptWords.length > 0) {
+    statusEl.textContent = `${transcriptWords.length} words (edited)`;
+    renderWordEditor();
+  } else {
+    statusEl.textContent = '';
+    document.getElementById('word-editor').innerHTML =
+      '<span class="word-placeholder">Click "Transcribe" to load editable subtitle words for this clip</span>';
+  }
+}
+
+function renderWordEditor() {
+  const editor = document.getElementById('word-editor');
+  editor.innerHTML = '';
+  if (transcriptWords.length === 0) {
+    editor.innerHTML = '<span class="word-placeholder">No words — click + Add word or Transcribe again</span>';
+    return;
+  }
+  transcriptWords.forEach((w, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'word-chip' + (w.censored ? ' censored' : '');
+
+    // Censor toggle — 🔇 when active, muted icon when not
+    const censorBtn = document.createElement('button');
+    censorBtn.className = 'word-censor-btn';
+    censorBtn.textContent = '🔇';
+    censorBtn.title = w.censored
+      ? 'Uncensor: restore audio, remove bleep'
+      : 'Censor: bleep audio + show **** in subtitle (editable)';
+    censorBtn.addEventListener('click', () => {
+      if (transcriptWords[i].censored) {
+        transcriptWords[i].censored = false;
+        if (transcriptWords[i].original_text !== undefined) {
+          transcriptWords[i].text = transcriptWords[i].original_text;
+          delete transcriptWords[i].original_text;
+        }
+      } else {
+        transcriptWords[i].original_text = transcriptWords[i].text;
+        transcriptWords[i].text = '****';
+        transcriptWords[i].censored = true;
+      }
+      renderWordEditor();
+    });
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'word-text';
+    textSpan.contentEditable = 'true';
+    textSpan.textContent = w.text;
+    textSpan.spellcheck = false;
+    textSpan.addEventListener('input', () => {
+      transcriptWords[i].text = textSpan.textContent || '';
+    });
+    textSpan.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && textSpan.textContent === '') {
+        e.preventDefault();
+        transcriptWords.splice(i, 1);
+        renderWordEditor();
+        const chips = editor.querySelectorAll('.word-text');
+        if (chips[i - 1]) chips[i - 1].focus();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const chips = editor.querySelectorAll('.word-text');
+        if (chips[i + 1]) chips[i + 1].focus();
+      }
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'word-del';
+    delBtn.textContent = '×';
+    delBtn.title = 'Delete word';
+    delBtn.addEventListener('click', () => {
+      transcriptWords.splice(i, 1);
+      renderWordEditor();
+    });
+
+    chip.appendChild(censorBtn);
+    chip.appendChild(textSpan);
+    chip.appendChild(delBtn);
+    editor.appendChild(chip);
+  });
+  document.getElementById('transcript-status').textContent = `${transcriptWords.length} words`;
+}
+
+document.getElementById('btn-load-transcript').addEventListener('click', async () => {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const statusEl = document.getElementById('transcript-status');
+  const btn = document.getElementById('btn-load-transcript');
+  btn.disabled = true;
+  statusEl.textContent = 'Transcribing…';
+  document.getElementById('word-editor').innerHTML =
+    '<span class="word-placeholder">Transcribing, please wait…</span>';
+
+  try {
+    const resp = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        start_sec: state.trimStart,
+        end_sec:   state.trimEnd,
+        peak_sec:  c.peak_sec,
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      statusEl.textContent = `✕ ${data.error}`;
+      document.getElementById('word-editor').innerHTML =
+        `<span class="word-placeholder" style="color:#f87171">${data.error}</span>`;
+      return;
+    }
+    transcriptWords = data.words;
+    statusEl.textContent = `${transcriptWords.length} words${data.cached ? ' (cached)' : ''}`;
+    renderWordEditor();
+  } catch (e) {
+    statusEl.textContent = `✕ ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('btn-add-word').addEventListener('click', () => {
+  const last = transcriptWords[transcriptWords.length - 1];
+  const t = last ? last.end : 0;
+  transcriptWords.push({ text: 'WORD', start: t, end: t + 0.5 });
+  renderWordEditor();
+  const chips = document.getElementById('word-editor').querySelectorAll('.word-text');
+  if (chips.length) chips[chips.length - 1].focus();
+  const range = document.createRange();
+  const last2 = chips[chips.length - 1];
+  if (last2) { range.selectNodeContents(last2); document.getSelection().removeAllRanges(); document.getSelection().addRange(range); }
+});
+
+document.getElementById('btn-clear-transcript').addEventListener('click', () => {
+  transcriptWords = [];
+  document.getElementById('transcript-status').textContent = '';
+  document.getElementById('word-editor').innerHTML =
+    '<span class="word-placeholder">Cleared. Click "Transcribe" to reload.</span>';
+});
+
+// ── Detection → opens progress modal ─────────────────────────────
+let detectLogOffset = 0;
+
+async function startDetection() {
+  detectLogOffset = 0;
+  document.getElementById('modal-detect').style.display = 'flex';
+  document.getElementById('detect-result').textContent = '';
+  document.getElementById('detect-result').className = 'progress-result';
+  document.getElementById('detect-done-actions').style.display = 'none';
+  document.getElementById('detect-step').textContent = 'Starting…';
+  document.getElementById('detect-log').innerHTML = '';
+  document.getElementById('detect-bar').classList.add('indeterminate');
+
+  await fetch('/api/detect/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+  detectPollTimer = setInterval(pollDetectProgress, 1800);
+}
+
+document.getElementById('btn-run-detect').addEventListener('click', startDetection);
+document.getElementById('btn-hdr-detect').addEventListener('click', startDetection);
+
+async function pollDetectProgress() {
+  const [statusResp, logResp] = await Promise.all([
+    fetch('/api/detect/status'),
+    fetch(`/api/log?type=detect&after=${detectLogOffset}`),
+  ]);
+  const status  = await statusResp.json();
+  const logData = await logResp.json();
+
+  if (logData.lines && logData.lines.length) {
+    detectLogOffset += logData.lines.length;
+    appendLog('detect-log', 'detect-step', logData.lines);
+  }
+
+  if (status.state === 'done') {
+    clearInterval(detectPollTimer); detectPollTimer = null;
+    document.getElementById('detect-bar').classList.remove('indeterminate');
+    document.getElementById('detect-bar').style.width = '100%';
+    document.getElementById('detect-result').className = 'progress-result ok';
+    document.getElementById('detect-result').textContent = '✓ Detection complete!';
+    document.getElementById('detect-done-actions').style.display = 'flex';
+  } else if (status.state === 'error') {
+    clearInterval(detectPollTimer); detectPollTimer = null;
+    document.getElementById('detect-result').className = 'progress-result err';
+    document.getElementById('detect-result').textContent = `✕ Detection failed (exit ${status.exit_code})`;
+    document.getElementById('detect-done-actions').style.display = 'flex';
+  }
+}
+
+document.getElementById('btn-detect-reload').addEventListener('click', () => {
+  document.getElementById('modal-detect').style.display = 'none';
+  location.reload();
+});
+
+// ── Log helper ────────────────────────────────────────────────────
+// Appends new lines to a log div, classifies them, and updates step text.
+const STEP_RE = /^\[[\d\/]+\]|^Auto-approved|^Rendering |^Done\.|^  → |^  SKIP|^  transcribed|^  !! /;
+const FRAME_RE = /^frame=/;
+function appendLog(logId, stepId, lines) {
+  const logEl  = document.getElementById(logId);
+  const stepEl = document.getElementById(stepId);
+  lines.forEach(line => {
+    // Skip objc/dylib noise
+    if (/objc\[|AVFFrame|AVFAudio|dylib|duplic|unauthenticated|TwitchDownloader \d|STATUS.*Down|STATUS.*Back|STATUS.*Writ/.test(line)) return;
+    const d = document.createElement('div');
+    d.className = 'll';
+    if (STEP_RE.test(line)) { d.className += ' step'; if (stepEl) stepEl.textContent = line.trim(); }
+    else if (/error|Error|ERROR/.test(line)) d.className += ' err';
+    else if (/Done\.|complete|✓/.test(line)) d.className += ' done';
+    // Show frame= lines briefly in step but don't add to log (too noisy)
+    if (FRAME_RE.test(line)) { if (stepEl) stepEl.textContent = line.trim(); return; }
+    d.textContent = line;
+    logEl.appendChild(d);
+  });
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── VOD modal ─────────────────────────────────────────────────────
+document.getElementById('btn-select-vod').addEventListener('click', () => {
+  document.getElementById('vod-input').value = '';
+  document.getElementById('vod-msg').textContent = '';
+  document.getElementById('vod-msg').className = 'modal-msg';
+  document.getElementById('modal-vod').style.display = 'flex';
+});
+document.getElementById('btn-vod-close').addEventListener('click',   () => { document.getElementById('modal-vod').style.display = 'none'; });
+document.getElementById('btn-vod-cancel').addEventListener('click',  () => { document.getElementById('modal-vod').style.display = 'none'; });
+
+document.getElementById('btn-vod-confirm').addEventListener('click', async () => {
+  const val  = document.getElementById('vod-input').value.trim();
+  const type = document.querySelector('input[name="vod-type"]:checked').value;
+  const msg  = document.getElementById('vod-msg');
+  if (!val) { msg.textContent = 'Enter a VOD ID or file path.'; msg.className = 'modal-msg err'; return; }
+
+  const body = type === 'local' ? { file_path: val } : { vod_id: val };
+  msg.textContent = 'Setting VOD…'; msg.className = 'modal-msg';
+
+  const resp = await fetch('/api/vod/set', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (data.error) { msg.textContent = data.error; msg.className = 'modal-msg err'; return; }
+
+  msg.textContent = `✓ VOD set to ${data.vod_id}`; msg.className = 'modal-msg ok';
+  document.getElementById('hdr-vod-id').textContent = data.vod_id;
+  setTimeout(() => {
+    document.getElementById('modal-vod').style.display = 'none';
+    location.reload();
+  }, 800);
+});
+
+// ── Header approved count ─────────────────────────────────────────
+function updateHeaderCount() {
+  const el = document.getElementById('hdr-approved-count');
+  const n  = state.approved.length;
+  el.textContent = n > 0 ? `${n} approved` : '';
+}
+
+// ── ASS color → CSS hex helper ────────────────────────────────────
+function assToRgb(ass) {
+  // &H00BBGGRR → #RRGGBB
+  const hex = ass.replace(/&H[\dA-Fa-f]{2}/i, '');
+  const r = hex.slice(4, 6) || 'ff';
+  const g = hex.slice(2, 4) || 'ff';
+  const b = hex.slice(0, 2) || 'ff';
+  return '#' + r + g + b;
+}
+
+// ── Crop math helpers ─────────────────────────────────────────────
+// Mirrors _centered_source_crop() in crop.py — same formula.
+function centeredSourceCrop(cam) {
+  const VW = 1920, VH = 1080;
+  const cx = Math.round(cam.x * VW);
+  const cy = Math.round(cam.y * VH);
+  const cw = Math.round(cam.w * VW);
+  const ch = Math.round(cam.h * VH);
+  const fx = state.faceCenter.x, fy = state.faceCenter.y;
+  const zoom = Math.max(1.0, state.faceCenter.zoom || 1.0);
+  const ow = 1080, oh = 1920;
+  const baseScale = Math.max(ow / cw, oh / ch);
+  const visW = Math.min(cw, ow / (baseScale * zoom));
+  const visH = Math.min(ch, oh / (baseScale * zoom));
+  const sx = cx + (cw - visW) * fx;
+  const sy = cy + (ch - visH) * fy;
+  return {sx, sy, visW, visH, cx, cy, cw, ch};
+}
+
+function buildCropParams(sceneName, cw, ch) {
+  const scene = SCENES[sceneName] || SCENES['scene_b'] || Object.values(SCENES)[0];
+  if (!scene || !scene.webcam) return null;
+  const cam = scene.webcam;
+  const {sx, sy, visW, visH} = centeredSourceCrop(cam);
+  const scale = Math.max(cw / visW, ch / visH);
+  const dw = visW * scale, dh = visH * scale;
+  const dx = -(dw - cw) * 0.5;
+  const dy = -(dh - ch) * 0.5;
+  return {sx, sy, sw: visW, sh: visH, dx, dy, dw, dh, cam};
+}
+
+// ── Render preview canvas (portrait, 9:16) ────────────────────────
+const renderPreviewCanvas = document.getElementById('render-preview');
+const rpCtx = renderPreviewCanvas.getContext('2d');
+const approvedPreviewCanvas = document.getElementById('approved-preview-canvas');
+approvedPreviewCanvas.width  = 144;
+approvedPreviewCanvas.height = 256;
+const apCtx = approvedPreviewCanvas.getContext('2d');
+let previewRafId = null;
+
+function getActiveSubGroup(clipTime) {
+  if (!transcriptWords.length) return null;
+  const wpb = state.subs.max_words_per_line || 4;
+  let activeIdx = -1;
+  for (let i = 0; i < transcriptWords.length; i++) {
+    if (clipTime >= transcriptWords[i].start && clipTime <= transcriptWords[i].end) {
+      activeIdx = i; break;
+    }
+  }
+  // Between words: show the group containing the last passed word
+  if (activeIdx < 0) {
+    for (let i = transcriptWords.length - 1; i >= 0; i--) {
+      if (transcriptWords[i].start <= clipTime) { activeIdx = i; break; }
+    }
+  }
+  if (activeIdx < 0) return null;
+  const lineStart = Math.floor(activeIdx / wpb) * wpb;
+  return { words: transcriptWords.slice(lineStart, lineStart + wpb), activeInGroup: activeIdx - lineStart };
+}
+
+function drawSubsOnCanvas(ctx, cw, ch) {
+  const group = getActiveSubGroup(player.currentTime - state.trimStart);
+  if (!group || !group.words.length) return;
+  const scale = ch / 1920;
+  const fontSize = Math.max(8, Math.round(state.subs.font_size * scale));
+  const y = Math.round(ch * (state.subs.position_y_frac || 0.75));
+  ctx.save();
+  ctx.font = `bold ${fontSize}px "Komika Axis", sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const gap = fontSize * 0.25;
+  const texts = group.words.map(w => (state.subs.all_caps ? w.text.toUpperCase() : w.text));
+  const widths = texts.map(t => ctx.measureText(t).width + gap);
+  const totalW = widths.reduce((a, b) => a + b, 0) - gap;
+  let x = Math.round(cw / 2 - totalW / 2);
+  texts.forEach((text, i) => {
+    const isActive = (i === group.activeInGroup);
+    const wx = x + widths[i] / 2 - gap / 2;
+    ctx.lineWidth = Math.max(1, fontSize * 0.14);
+    ctx.strokeStyle = 'rgba(0,0,0,0.95)';
+    ctx.lineJoin = 'round';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = isActive
+      ? assToRgb(state.subs.highlight_color)
+      : assToRgb(state.subs.primary_color);
+    ctx.fillText(text, x, y);
+    x += widths[i];
+  });
+  ctx.restore();
+}
+
+function drawRenderPreview() {
+  const cw = renderPreviewCanvas.width;   // 216
+  const ch = renderPreviewCanvas.height;  // 384
+  rpCtx.clearRect(0, 0, cw, ch);
+  rpCtx.fillStyle = '#111827';
+  rpCtx.fillRect(0, 0, cw, ch);
+  if (player.readyState < 2) return;
+  const p = buildCropParams('scene_b', cw, ch);
+  if (!p) return;
+  rpCtx.save();
+  rpCtx.beginPath(); rpCtx.rect(0, 0, cw, ch); rpCtx.clip();
+  rpCtx.drawImage(player, p.sx, p.sy, p.sw, p.sh, p.dx, p.dy, p.dw, p.dh);
+  rpCtx.restore();
+  drawSubsOnCanvas(rpCtx, cw, ch);
+}
+
+function drawApprovedPreview() {
+  const cw = approvedPreviewCanvas.width;
+  const ch = approvedPreviewCanvas.height;
+  apCtx.clearRect(0, 0, cw, ch);
+  apCtx.fillStyle = '#111827';
+  apCtx.fillRect(0, 0, cw, ch);
+  if (player.readyState < 2) return;
+  const p = buildCropParams('scene_b', cw, ch);
+  if (!p) return;
+  apCtx.save();
+  apCtx.beginPath(); apCtx.rect(0, 0, cw, ch); apCtx.clip();
+  apCtx.drawImage(player, p.sx, p.sy, p.sw, p.sh, p.dx, p.dy, p.dw, p.dh);
+  apCtx.restore();
+  // Subtitle overlay if transcript words are loaded
+  drawSubsOnCanvas(apCtx, cw, ch);
+}
+
+function updateApprovedPreviewMeta() {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const approved = state.approved.find(a => Math.abs(a.peak_sec - c.peak_sec) < 0.01);
+  if (!approved) return;
+  _atrimClip = approved;   // keep in sync
+  atrimUpdateMeta();
+}
+
+function showApprovedPreview(visible) {
+  const section = document.getElementById('approved-preview-section');
+  section.style.display = visible ? 'block' : 'none';
+  if (visible) {
+    updateApprovedPreviewMeta();
+    // Load trim controls for the current approved clip
+    if (state.selectedIdx >= 0) {
+      const c = state.candidates[state.selectedIdx];
+      const approved = state.approved.find(a => Math.abs(a.peak_sec - c.peak_sec) < 0.01);
+      atrimLoad(approved || null);
+    }
+  } else {
+    _atrimClip = null;
+  }
+}
+
+function previewRafLoop() {
+  const tsSection = document.getElementById('transcript-section');
+  if (tsSection && tsSection.style.display !== 'none') drawRenderPreview();
+  const apSection = document.getElementById('approved-preview-section');
+  if (apSection && apSection.style.display !== 'none') drawApprovedPreview();
+  previewRafId = requestAnimationFrame(previewRafLoop);
+}
+previewRafId = requestAnimationFrame(previewRafLoop);
+
+// Redraw preview when words change
+const _origRenderWordEditor = renderWordEditor;
+// (patched below after definition)
+
+// ── Edit modal (live video canvas) ───────────────────────────────
+const editVideoCanvas = document.getElementById('edit-video-canvas');
+const evCtx = editVideoCanvas.getContext('2d');
+const editCxEl   = document.getElementById('edit-cx');
+const editCyEl   = document.getElementById('edit-cy');
+const editZoomEl = document.getElementById('edit-zoom');
+const editCxVal  = document.getElementById('edit-cx-val');
+const editCyVal  = document.getElementById('edit-cy-val');
+const editZoomVal = document.getElementById('edit-zoom-val');
+
+function _drawEditBox(color, label, box, cw, ch) {
+  const bx = box.x * cw, by = box.y * ch;
+  const bw = box.w * cw, bh = box.h * ch;
+  evCtx.save();
+  evCtx.beginPath(); evCtx.rect(bx, by, bw, bh); evCtx.clip();
+  evCtx.drawImage(player, 0, 0, cw, ch);
+  evCtx.restore();
+  evCtx.strokeStyle = color;
+  evCtx.lineWidth = 3;
+  evCtx.strokeRect(bx, by, bw, bh);
+  // Solid pill badge
+  evCtx.save();
+  evCtx.font = 'bold 14px ui-sans-serif,sans-serif';
+  const tw = evCtx.measureText(label).width;
+  const ph = 20, ppad = 7, pr = 4;
+  const px = bx + 6, py = by + 6;
+  evCtx.fillStyle = color;
+  evCtx.beginPath();
+  evCtx.roundRect(px, py, tw + ppad * 2, ph, pr);
+  evCtx.fill();
+  evCtx.fillStyle = '#fff';
+  evCtx.textBaseline = 'middle';
+  evCtx.fillText(label, px + ppad, py + ph / 2);
+  evCtx.restore();
+  const hs = 8; evCtx.fillStyle = color;
+  [[bx,by],[bx+bw,by],[bx,by+bh],[bx+bw,by+bh]].forEach(([hx,hy]) => {
+    evCtx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
+  });
+}
+
+function drawEditCanvas() {
+  const cw = editVideoCanvas.width;
+  const ch = editVideoCanvas.height;
+  evCtx.clearRect(0, 0, cw, ch);
+  evCtx.fillStyle = '#111827';
+  evCtx.fillRect(0, 0, cw, ch);
+  if (player.readyState < 2) return;
+  evCtx.drawImage(player, 0, 0, cw, ch);
+
+  evCtx.fillStyle = 'rgba(0,0,0,0.45)';
+  evCtx.fillRect(0, 0, cw, ch);
+  if (state.editCamBox)   _drawEditBox('#6366f1', 'Webcam',            state.editCamBox,   cw, ch);
+  if (state.editGameBox)  _drawEditBox('#22c55e', 'Gameplay / Dual ▲', state.editGameBox,  cw, ch);
+  if (state.editGameBox2) _drawEditBox('#f59e0b', 'Dual ▼',            state.editGameBox2, cw, ch);
+}
+
+let editModalRafId = null;
+function editModalRafLoop() {
+  drawEditCanvas();
+  editModalRafId = requestAnimationFrame(editModalRafLoop);
+}
+
+function syncEditSlidersToState() {
+  editCxEl.value   = state.faceCenter.x;
+  editCyEl.value   = state.faceCenter.y;
+  editZoomEl.value = state.faceCenter.zoom || 1.0;
+  editCxVal.textContent   = state.faceCenter.x.toFixed(2);
+  editCyVal.textContent   = state.faceCenter.y.toFixed(2);
+  editZoomVal.textContent = parseFloat(state.faceCenter.zoom || 1.0).toFixed(2) + '×';
+  // Hide centering sliders in gameplay/dual-screen modes (not applicable)
+  const slidersWrap = document.getElementById('edit-sliders-wrap');
+  const hideSliders = state.layoutMode === 'include_gameplay' || state.layoutMode === 'dual_screen';
+  if (slidersWrap) slidersWrap.style.display = hideSliders ? 'none' : 'block';
+  const discordCb = document.getElementById('edit-discord');
+  if (discordCb) discordCb.checked = !!state.discordSound;
+  drawEditCanvas();
+  const radio = document.querySelector(`input[name="edit-layout"][value="${state.layoutMode}"]`);
+  if (radio) radio.checked = true;
+}
+
+document.getElementById('btn-clip-edit').addEventListener('click', () => {
+  syncEditSlidersToState();
+  document.getElementById('modal-clip-edit').style.display = 'flex';
+  editModalRafId = requestAnimationFrame(editModalRafLoop);
+});
+
+function closeEditModal() {
+  document.getElementById('modal-clip-edit').style.display = 'none';
+  if (editModalRafId) { cancelAnimationFrame(editModalRafId); editModalRafId = null; }
+}
+document.getElementById('btn-edit-close').addEventListener('click', closeEditModal);
+document.getElementById('btn-edit-cancel').addEventListener('click', closeEditModal);
+
+document.getElementById('btn-edit-reset').addEventListener('click', () => {
+  if (state.layoutMode === 'dual_screen') {
+    state.editGameBox  = {x:_SQ_X, y:0.04, w:_SQ_W, h:_SQ_H};
+    state.editGameBox2 = {x:_SQ_X, y:0.45, w:_SQ_W, h:_SQ_H};
+    drawEditCanvas();
+  } else {
+    state.faceCenter = {x: 0.5, y: 0.5, zoom: 1.0};
+    syncEditSlidersToState();
+  }
+});
+
+editZoomEl.addEventListener('input', () => {
+  state.faceCenter.zoom = parseFloat(editZoomEl.value);
+  editZoomVal.textContent = state.faceCenter.zoom.toFixed(2) + '×';
+  drawEditCanvas();
+});
+editCxEl.addEventListener('input', () => {
+  state.faceCenter.x = parseFloat(editCxEl.value);
+  editCxVal.textContent = state.faceCenter.x.toFixed(2);
+  drawEditCanvas();
+});
+editCyEl.addEventListener('input', () => {
+  state.faceCenter.y = parseFloat(editCyEl.value);
+  editCyVal.textContent = state.faceCenter.y.toFixed(2);
+  drawEditCanvas();
+});
+
+document.querySelectorAll('input[name="edit-layout"]').forEach(r => {
+  r.addEventListener('change', () => {
+    if (!r.checked) return;
+    const prev = state.layoutMode;
+    state.layoutMode = r.value;
+    // When switching INTO dual_screen cold (no saved crops), set sensible halves.
+    if (state.layoutMode === 'dual_screen' && prev !== 'dual_screen') {
+      const defGame  = (SCENES['scene_a'] || Object.values(SCENES)[0] || {}).gameplay  || {x:0.31,y:0,w:0.47,h:1};
+      const defGame2 = (SCENES['scene_a'] || Object.values(SCENES)[0] || {}).gameplay2 || {x:0.2128,y:0.5,w:0.7872,h:0.5};
+      const topIsDefault  = !state.editGameBox  || (Math.abs((state.editGameBox.x  - defGame.x))  < 0.01 && Math.abs((state.editGameBox.y  - defGame.y))  < 0.01);
+      const botIsDefault  = !state.editGameBox2 || (Math.abs((state.editGameBox2.x - defGame2.x)) < 0.01 && Math.abs((state.editGameBox2.y - defGame2.y)) < 0.01);
+      if (topIsDefault)  state.editGameBox  = {x:_SQ_X, y:0.04, w:_SQ_W, h:_SQ_H};
+      if (botIsDefault)  state.editGameBox2 = {x:_SQ_X, y:0.45, w:_SQ_W, h:_SQ_H};
+    }
+    const slidersWrap = document.getElementById('edit-sliders-wrap');
+    const hideSliders = state.layoutMode === 'include_gameplay' || state.layoutMode === 'dual_screen';
+    if (slidersWrap) slidersWrap.style.display = hideSliders ? 'none' : 'block';
+    drawEditCanvas();
+  });
+});
+
+// Edit canvas interaction — face-only: click; include_gameplay/dual_screen: drag+resize boxes
+// _editDrag = {target, mode:'move'|'resize', side?:'tl'|'tr'|'bl'|'br', startPx,startPy,startBox}
+let _editDrag = null;
+
+// Grab radius in canvas-fraction units (≈10px on 452px wide canvas)
+const _GRAB_R_X = 12 / 452;
+const _GRAB_R_Y = 12 / 254;
+
+// Aspect ratio lock for dual_screen crop boxes.
+// h/w that makes a box appear square on the 452×254 canvas
+// (≈ source video AR 1456/816, so source pixels are also square).
+const _DUAL_BOX_AR = 452 / 254;  // ≈ 1.780
+// Default square box width (fraction) and derived height
+const _SQ_W = 0.30;
+const _SQ_H = _SQ_W * _DUAL_BOX_AR;  // ≈ 0.534
+const _SQ_X = (1 - _SQ_W) / 2;       // centered = 0.35
+
+function _cornerHit(box, px, py) {
+  const corners = [
+    {cx: box.x,       cy: box.y,       side: 'tl'},
+    {cx: box.x+box.w, cy: box.y,       side: 'tr'},
+    {cx: box.x,       cy: box.y+box.h, side: 'bl'},
+    {cx: box.x+box.w, cy: box.y+box.h, side: 'br'},
+  ];
+  for (const c of corners) {
+    if (Math.abs(px - c.cx) < _GRAB_R_X && Math.abs(py - c.cy) < _GRAB_R_Y) return c.side;
+  }
+  return null;
+}
+
+function _hitBox(box, px, py) {
+  return px >= box.x && px <= box.x+box.w && py >= box.y && py <= box.y+box.h;
+}
+
+function _applyResize(sb, side, dx, dy) {
+  let {x, y, w, h} = sb;
+  if (side.includes('r')) w = Math.max(0.04, w + dx);
+  if (side.includes('b')) h = Math.max(0.04, h + dy);
+  if (side.includes('l')) { x = Math.min(x + w - 0.04, x + dx); w = sb.w - dx; w = Math.max(0.04, w); }
+  if (side.includes('t')) { y = Math.min(y + h - 0.04, y + dy); h = sb.h - dy; h = Math.max(0.04, h); }
+
+  // Lock to square canvas pixels in dual_screen mode.
+  // Width is the primary axis; height is always derived from it.
+  if (state.layoutMode === 'dual_screen') {
+    h = w * _DUAL_BOX_AR;
+    // Re-anchor the y origin for top handles (height changed from bottom up).
+    if (side.includes('t')) y = sb.y + sb.h - h;
+  }
+
+  x = Math.max(0, x); y = Math.max(0, y);
+  w = Math.min(1 - x, w); h = Math.min(1 - y, h);
+  return {x, y, w, h};
+}
+
+function _setTargetBox(target, nb) {
+  if (target === 'cam')   state.editCamBox   = nb;
+  else if (target === 'game2') state.editGameBox2 = nb;
+  else                         state.editGameBox  = nb;
+}
+
+function _getTargetBox(target) {
+  if (target === 'cam')   return state.editCamBox;
+  if (target === 'game2') return state.editGameBox2;
+  return state.editGameBox;
+}
+
+function _applyFaceClick(px, py) {
+  const scene = SCENES['scene_b'] || Object.values(SCENES)[0];
+  if (!scene || !scene.webcam) return;
+  const cam = scene.webcam;
+  const camRelX = (px - cam.x) / cam.w;
+  const camRelY = (py - cam.y) / cam.h;
+  if (camRelX < 0 || camRelX > 1 || camRelY < 0 || camRelY > 1) return;
+  const VW = 1920, VH = 1080;
+  const cw = cam.w * VW, ch = cam.h * VH;
+  const zoom = Math.max(1.0, state.faceCenter.zoom || 1.0);
+  const baseScale = Math.max(1080 / cw, 1920 / ch);
+  const visW = Math.min(cw, 1080 / (baseScale * zoom));
+  const visH = Math.min(ch, 1920 / (baseScale * zoom));
+  const rangeX = cw - visW, rangeY = ch - visH;
+  const fx = rangeX > 0 ? (camRelX * cw - visW / 2) / rangeX : 0.5;
+  const fy = rangeY > 0 ? (camRelY * ch - visH / 2) / rangeY : 0.5;
+  state.faceCenter = {
+    zoom: state.faceCenter.zoom || 1.0,
+    x: parseFloat(Math.max(0, Math.min(1, fx)).toFixed(2)),
+    y: parseFloat(Math.max(0, Math.min(1, fy)).toFixed(2)),
+  };
+  syncEditSlidersToState();
+}
+
+editVideoCanvas.addEventListener('mousedown', (e) => {
+  const rect = editVideoCanvas.getBoundingClientRect();
+  const px = (e.clientX - rect.left) / rect.width;
+  const py = (e.clientY - rect.top)  / rect.height;
+
+  // Check all 3 boxes — game2 first (bottom) so it has priority in overlapping regions
+  const targets = [
+    {t:'game2', b:state.editGameBox2},
+    {t:'cam',   b:state.editCamBox},
+    {t:'game',  b:state.editGameBox},
+  ];
+  for (const {t, b} of targets) {
+    if (!b) continue;
+    const side = _cornerHit(b, px, py);
+    if (side) {
+      _editDrag = {target:t, mode:'resize', side, startPx:px, startPy:py, startBox:{...b}};
+      e.preventDefault(); return;
+    }
+  }
+  for (const {t, b} of targets) {
+    if (!b) continue;
+    if (_hitBox(b, px, py)) {
+      _editDrag = {target:t, mode:'move', startPx:px, startPy:py, startBox:{...b}};
+      e.preventDefault(); return;
+    }
+  }
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!_editDrag) return;
+  const rect = editVideoCanvas.getBoundingClientRect();
+  const px = (e.clientX - rect.left) / rect.width;
+  const py = (e.clientY - rect.top)  / rect.height;
+  if (_editDrag.target === 'face') { _applyFaceClick(px, py); return; }
+  const dx = px - _editDrag.startPx, dy = py - _editDrag.startPy;
+  const sb = _editDrag.startBox;
+  let nb;
+  if (_editDrag.mode === 'resize') {
+    nb = _applyResize(sb, _editDrag.side, dx, dy);
+  } else {
+    nb = {x: Math.max(0, Math.min(1-sb.w, sb.x+dx)), y: Math.max(0, Math.min(1-sb.h, sb.y+dy)), w:sb.w, h:sb.h};
+  }
+  _setTargetBox(_editDrag.target, nb);
+  drawEditCanvas();
+});
+
+// Update cursor based on hover (resize vs move)
+editVideoCanvas.addEventListener('mousemove', (e) => {
+  if (_editDrag) return;
+  const rect = editVideoCanvas.getBoundingClientRect();
+  const px = (e.clientX - rect.left) / rect.width;
+  const py = (e.clientY - rect.top)  / rect.height;
+  const boxes = [state.editCamBox, state.editGameBox, state.editGameBox2];
+  const cursors = {tl:'nwse-resize', tr:'nesw-resize', bl:'nesw-resize', br:'nwse-resize'};
+  for (const b of boxes) {
+    if (!b) continue;
+    const side = _cornerHit(b, px, py);
+    if (side) { editVideoCanvas.style.cursor = cursors[side]; return; }
+    if (_hitBox(b, px, py)) { editVideoCanvas.style.cursor = 'grab'; return; }
+  }
+  editVideoCanvas.style.cursor = '';
+});
+
+document.addEventListener('mouseup', () => { _editDrag = null; });
+
+document.getElementById('edit-discord').addEventListener('change', (e) => {
+  state.discordSound = e.target.checked;
+});
+
+
+document.getElementById('btn-edit-save').addEventListener('click', async () => {
+  closeEditModal();
+
+  // Persist to approved.json if this clip is already approved
+  if (state.selectedIdx >= 0) {
+    const c = state.candidates[state.selectedIdx];
+    const peakToMatch = state.editingApprovedPeak !== null ? state.editingApprovedPeak : c.peak_sec;
+    const approved = state.approved.find(a => Math.abs(a.peak_sec - peakToMatch) < 0.01);
+    if (approved) {
+      approved.face_center   = {...state.faceCenter};
+      approved.discord_sound = state.discordSound;
+      approved.cam_crop      = state.editCamBox   ? {...state.editCamBox}   : undefined;
+      approved.game_crop     = state.editGameBox  ? {...state.editGameBox}  : undefined;
+      approved.game_crop2    = state.editGameBox2 ? {...state.editGameBox2} : undefined;
+      await fetch('/api/approve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(approved),
+      });
+      const fresh = await fetch('/api/state').then(r => r.json());
+      state.approved = fresh.approved;
+      renderApprovedList();
+      updateApprovedPreviewMeta();
+      if (_atrimClip) atrimUpdateMeta();
+    }
+  }
+});
+
+document.getElementById('btn-edit-apply-all').addEventListener('click', async () => {
+  const n = state.approved.length;
+  if (n === 0) { alert('No approved clips to apply to.'); return; }
+  if (!confirm(`Apply these crop boxes to all ${n} approved clips?`)) return;
+
+  const crops = {};
+  if (state.editCamBox)   crops.cam_crop   = {...state.editCamBox};
+  if (state.editGameBox)  crops.game_crop  = {...state.editGameBox};
+  if (state.editGameBox2) crops.game_crop2 = {...state.editGameBox2};
+
+  await fetch('/api/crops/apply_all', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(crops),
+  });
+
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+  renderApprovedList();
+  closeEditModal();
+});
+
+// ── Approved trim controls ────────────────────────────────────────
+const atrimStart    = document.getElementById('atrim-start');
+const atrimEnd      = document.getElementById('atrim-end');
+const atrimStartVal = document.getElementById('atrim-start-val');
+const atrimEndVal   = document.getElementById('atrim-end-val');
+const atrimWin      = document.getElementById('atrim-win');
+const atrimPeakEl   = document.getElementById('atrim-peak');
+
+let _atrimClip = null;   // the approved clip currently loaded in trim controls
+let _atrimSaveTimer = null;
+
+function atrimLoad(approvedClip) {
+  _atrimClip = approvedClip;
+  if (!approvedClip) return;
+
+  // Slider range: ±30 s around the original clip, clamped to [0, video duration]
+  const margin = 30;
+  const lo = Math.max(0, approvedClip.start_sec - margin);
+  const hi = Math.min(state.videoDuration || 99999, approvedClip.end_sec + margin);
+
+  atrimStart.min = lo; atrimStart.max = hi; atrimStart.step = 0.1;
+  atrimEnd.min   = lo; atrimEnd.max   = hi; atrimEnd.step   = 0.1;
+  atrimStart.value = approvedClip.start_sec;
+  atrimEnd.value   = approvedClip.end_sec;
+  atrimUpdateLabels();
+  atrimUpdateStrip();
+}
+
+function atrimUpdateLabels() {
+  atrimStartVal.textContent = fmtTime(parseFloat(atrimStart.value));
+  atrimEndVal.textContent   = fmtTime(parseFloat(atrimEnd.value));
+}
+
+function atrimUpdateStrip() {
+  if (!_atrimClip) return;
+  const lo = parseFloat(atrimStart.min), hi = parseFloat(atrimEnd.max);
+  const span = hi - lo;
+  if (span <= 0) return;
+  const s = parseFloat(atrimStart.value), e = parseFloat(atrimEnd.value);
+  const startPct = (s - lo) / span * 100;
+  const endPct   = (e - lo) / span * 100;
+  const peakPct  = (_atrimClip.peak_sec - lo) / span * 100;
+  atrimWin.style.left  = startPct + '%';
+  atrimWin.style.width = (endPct - startPct) + '%';
+  atrimPeakEl.style.left = Math.max(0, Math.min(100, peakPct)) + '%';
+}
+
+function atrimScheduleSave() {
+  clearTimeout(_atrimSaveTimer);
+  _atrimSaveTimer = setTimeout(atrimSave, 400);
+}
+
+async function atrimSave() {
+  if (!_atrimClip) return;
+  const newStart = parseFloat(atrimStart.value);
+  const newEnd   = parseFloat(atrimEnd.value);
+  if (newEnd <= newStart + 0.5) return; // sanity guard
+
+  // Update the in-memory approved entry
+  _atrimClip.start_sec = newStart;
+  _atrimClip.end_sec   = newEnd;
+
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(_atrimClip),
+  });
+
+  // Sync state from server
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+  renderApprovedList();
+  updateHeaderCount();
+
+  // Keep the same clip selected and seek video to new start
+  player.currentTime = newStart;
+  atrimUpdateMeta();
+}
+
+function atrimUpdateMeta() {
+  if (!_atrimClip) return;
+  const dur = (_atrimClip.end_sec - _atrimClip.start_sec).toFixed(1);
+  const zoom = (state.faceCenter.zoom || 1.0).toFixed(2);
+  const cx = state.faceCenter.x.toFixed(2);
+  const cy = state.faceCenter.y.toFixed(2);
+  document.getElementById('approved-preview-meta').innerHTML =
+    `${fmtTimeSimple(_atrimClip.start_sec)}–${fmtTimeSimple(_atrimClip.end_sec)} · ${dur}s<br>zoom ${zoom}× · x ${cx} · y ${cy}`;
+}
+
+atrimStart.addEventListener('input', () => {
+  let v = parseFloat(atrimStart.value);
+  const e = parseFloat(atrimEnd.value);
+  if (v >= e - 0.5) { v = e - 0.5; atrimStart.value = v; }
+  if (_atrimClip) { _atrimClip.start_sec = v; player.currentTime = v; }
+  atrimUpdateLabels(); atrimUpdateStrip();
+  atrimScheduleSave();
+});
+
+atrimEnd.addEventListener('input', () => {
+  let v = parseFloat(atrimEnd.value);
+  const s = parseFloat(atrimStart.value);
+  if (v <= s + 0.5) { v = s + 0.5; atrimEnd.value = v; }
+  if (_atrimClip) _atrimClip.end_sec = v;
+  atrimUpdateLabels(); atrimUpdateStrip();
+  atrimScheduleSave();
+});
+
+// Clicking the approved preview canvas opens the Edit modal for fine-tuning
+approvedPreviewCanvas.addEventListener('click', () => {
+  if (state.selectedIdx < 0) return;
+  syncEditSlidersToState();
+  document.getElementById('modal-clip-edit').style.display = 'flex';
+  editModalRafId = requestAnimationFrame(editModalRafLoop);
+});
+approvedPreviewCanvas.title = 'Click to open Frame Adjustments';
+
+// ── Init ──────────────────────────────────────────────────────────
+updateSubsPreview();
+loadState();
+</script>
+</body>
+</html>

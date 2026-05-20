@@ -1,0 +1,493 @@
+"""Web-based review GUI for the Twitch VOD clip factory.
+
+Usage:
+    python gui.py <vod_id>
+
+Opens a browser at http://localhost:5001 automatically.
+"""
+from __future__ import annotations
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import webbrowser
+from collections import deque
+from pathlib import Path
+
+from flask import Flask, jsonify, render_template, request, send_file
+from werkzeug.exceptions import NotFound
+
+ROOT = Path(__file__).parent
+WORK = ROOT / "work"
+
+app = Flask(__name__)
+app.config["VOD_ID"] = None
+
+# ── subprocess state ──────────────────────────────────────────────
+_render_proc: subprocess.Popen | None = None
+_render_state = "idle"   # idle | running | done | error
+_render_exit_code: int | None = None
+_render_lock = threading.Lock()
+_render_log: deque = deque(maxlen=200)
+
+_detect_proc: subprocess.Popen | None = None
+_detect_state = "idle"
+_detect_exit_code: int | None = None
+_detect_lock = threading.Lock()
+_detect_log: deque = deque(maxlen=200)
+
+
+# ── helpers ───────────────────────────────────────────────────────
+def _work() -> Path:
+    return WORK / app.config["VOD_ID"]
+
+
+def _candidates_path() -> Path:
+    return _work() / "candidates.json"
+
+
+def _approved_path() -> Path:
+    return _work() / "approved.json"
+
+
+def _chat_path() -> Path:
+    vid = app.config["VOD_ID"]
+    return _work() / f"{vid}_chat.json"
+
+
+def _load_candidates() -> list[dict]:
+    p = _candidates_path()
+    if not p.exists():
+        return []
+    return json.loads(p.read_text())
+
+
+def _load_approved() -> list[dict]:
+    p = _approved_path()
+    if not p.exists():
+        return []
+    return json.loads(p.read_text())
+
+
+def _save_approved(clips: list[dict]) -> None:
+    _approved_path().write_text(json.dumps(clips, indent=2))
+
+
+def _load_chat_msgs() -> list[dict]:
+    """Return list of {user, text, offset_sec} parsed from TwitchDownloaderCLI JSON."""
+    p = _chat_path()
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        msgs = []
+        for c in data.get("comments", []):
+            msgs.append({
+                "offset_sec": float(c["content_offset_seconds"]),
+                "user": c["commenter"]["display_name"],
+                "text": c["message"]["body"],
+            })
+        msgs.sort(key=lambda m: m["offset_sec"])
+        return msgs
+    except Exception as e:
+        app.logger.warning("Failed to parse chat JSON: %s", e)
+        return []
+
+
+def _has_transcript() -> bool:
+    return (_work() / "vod_transcript.json").exists()
+
+
+def _ffmpeg_env() -> dict:
+    env = os.environ.copy()
+    ffmpeg_bin = "/opt/homebrew/opt/ffmpeg-full/bin"
+    path = env.get("PATH", "")
+    if ffmpeg_bin not in path:
+        env["PATH"] = ffmpeg_bin + ":" + path
+    return env
+
+
+def _stream_proc(proc: subprocess.Popen, log_buf: deque,
+                 state_ref: list, exit_ref: list, lock: threading.Lock) -> None:
+    """Background thread: drain proc stdout into log_buf, then update state."""
+    for raw in proc.stdout:
+        line = raw.decode("utf-8", errors="replace").rstrip() if isinstance(raw, bytes) else raw.rstrip()
+        if line:
+            with lock:
+                log_buf.append(line)
+    proc.wait()
+    with lock:
+        exit_ref[0] = proc.returncode
+        state_ref[0] = "done" if proc.returncode == 0 else "error"
+
+
+# ── routes ────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    sys.path.insert(0, str(ROOT))
+    try:
+        from stages.cfg import load_global
+        cfg = load_global()
+        scenes = cfg.get("layout", {}).get("scenes", {})
+    except Exception:
+        scenes = {}
+    return render_template("gui.html", vod_id=app.config["VOD_ID"], scenes=scenes)
+
+
+@app.route("/video/<vod_id>")
+def serve_video(vod_id: str):
+    vod_path = (WORK / vod_id / f"{vod_id}.mp4").resolve()
+    if not vod_path.exists():
+        raise NotFound(f"VOD not found: {vod_path}")
+    return send_file(str(vod_path), mimetype="video/mp4", conditional=True)
+
+
+@app.route("/font/KOMIKAX_.ttf")
+def serve_font():
+    font_path = Path.home() / "Library" / "Fonts" / "KOMIKAX_.ttf"
+    if not font_path.exists():
+        raise NotFound("Font not found")
+    return send_file(str(font_path), mimetype="font/truetype")
+
+
+@app.route("/api/state")
+def api_state():
+    return jsonify({
+        "vod_id": app.config["VOD_ID"],
+        "candidates": _load_candidates(),
+        "approved": _load_approved(),
+        "has_transcript": _has_transcript(),
+    })
+
+
+@app.route("/api/messages")
+def api_messages():
+    try:
+        peak_sec = float(request.args.get("peak_sec", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "bad peak_sec"}), 400
+
+    vid = app.config["VOD_ID"]
+    work = _work()
+    transcript_path = work / "vod_transcript.json"
+    chat_msgs = _load_chat_msgs()
+
+    results = []
+
+    if _has_transcript() and chat_msgs:
+        try:
+            # Import here to avoid requiring rapidfuzz at GUI startup when it
+            # might not be installed into the calling Python.
+            sys.path.insert(0, str(ROOT))
+            from stages.pick_message import rank_messages
+            from stages.fetch import ChatMessage
+            from stages.cfg import load_global
+
+            cfg = load_global()
+            fetch_msgs = [
+                ChatMessage(offset_sec=m["offset_sec"],
+                            user=m["user"], text=m["text"])
+                for m in chat_msgs
+            ]
+            ranked = rank_messages(peak_sec, transcript_path, fetch_msgs, cfg, top_k=5)
+            results = [
+                {"user": r.user, "text": r.text,
+                 "offset_sec": r.offset_sec, "score": round(r.score, 1)}
+                for r in ranked
+            ]
+        except Exception as e:
+            app.logger.warning("rank_messages failed (%s), falling back", e)
+
+    if not results:
+        # Time-window fallback: messages ±30 s of peak, no transcript needed
+        window_sec = 30.0
+        for m in chat_msgs:
+            if abs(m["offset_sec"] - peak_sec) <= window_sec:
+                results.append({
+                    "user": m["user"],
+                    "text": m["text"],
+                    "offset_sec": m["offset_sec"],
+                    "score": 0.0,
+                })
+        results = results[:5]
+
+    return jsonify(results)
+
+
+@app.route("/api/approve", methods=["POST"])
+def api_approve():
+    clip = request.get_json(force=True)
+    if clip is None or "peak_sec" not in clip:
+        return jsonify({"error": "missing peak_sec"}), 400
+
+    approved = _load_approved()
+    # Upsert: replace existing entry with same peak_sec
+    peak = float(clip["peak_sec"])
+    approved = [c for c in approved if abs(float(c["peak_sec"]) - peak) > 0.01]
+    approved.append(clip)
+    approved.sort(key=lambda c: c["start_sec"])
+    _save_approved(approved)
+    return jsonify({"ok": True, "count": len(approved)})
+
+
+@app.route("/api/crops/apply_all", methods=["POST"])
+def api_crops_apply_all():
+    """Overwrite cam_crop/game_crop/game_crop2 on every approved clip at once."""
+    body = request.get_json(force=True) or {}
+    crops = {k: body[k] for k in ("cam_crop", "game_crop", "game_crop2") if body.get(k)}
+    approved = _load_approved()
+    for clip in approved:
+        clip.update(crops)
+    _save_approved(approved)
+    return jsonify({"ok": True, "updated": len(approved)})
+
+
+@app.route("/api/unapprove", methods=["POST"])
+def api_unapprove():
+    body = request.get_json(force=True)
+    if body is None or "peak_sec" not in body:
+        return jsonify({"error": "missing peak_sec"}), 400
+
+    peak = float(body["peak_sec"])
+    approved = _load_approved()
+    before = len(approved)
+    approved = [c for c in approved if abs(float(c["peak_sec"]) - peak) > 0.01]
+    _save_approved(approved)
+    return jsonify({"ok": True, "removed": before - len(approved)})
+
+
+@app.route("/api/render/start", methods=["POST"])
+def api_render_start():
+    global _render_proc, _render_state, _render_exit_code
+
+    with _render_lock:
+        if _render_state == "running":
+            return jsonify({"ok": False, "error": "already running"})
+
+        body = request.get_json(force=True) or {}
+        cmd = [sys.executable, "-u", str(ROOT / "pipeline.py"), "render",
+               app.config["VOD_ID"]]
+        only = body.get("only_variants", "").strip()
+        if only:
+            cmd += ["--only-variants", only]
+            
+        only_clip = body.get("only_clip")
+        if only_clip is not None:
+            cmd += ["--only-clip", str(only_clip)]
+
+        subs_y_frac = body.get("subs_y_frac")
+        if subs_y_frac is not None:
+            cmd += ["--subs-y-frac", str(subs_y_frac)]
+
+        _render_state = "running"
+        _render_exit_code = None
+        _render_log.clear()
+        _render_proc = subprocess.Popen(
+            cmd, cwd=str(ROOT), env=_ffmpeg_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+
+    def _watch_render():
+        global _render_state, _render_exit_code
+        for raw in _render_proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if line:
+                with _render_lock:
+                    _render_log.append(line)
+        _render_proc.wait()
+        with _render_lock:
+            _render_exit_code = _render_proc.returncode
+            _render_state = "done" if _render_proc.returncode == 0 else "error"
+
+    threading.Thread(target=_watch_render, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/render/status")
+def api_render_status():
+    with _render_lock:
+        resp = {"state": _render_state}
+        if _render_exit_code is not None:
+            resp["exit_code"] = _render_exit_code
+    return jsonify(resp)
+
+
+@app.route("/api/detect/start", methods=["POST"])
+def api_detect_start():
+    global _detect_proc, _detect_state, _detect_exit_code
+
+    with _detect_lock:
+        if _detect_state == "running":
+            return jsonify({"ok": False, "error": "already running"})
+
+        cmd = [sys.executable, "-u", str(ROOT / "pipeline.py"), "detect_only",
+               app.config["VOD_ID"]]
+        _detect_state = "running"
+        _detect_exit_code = None
+        _detect_log.clear()
+        _detect_proc = subprocess.Popen(
+            cmd, cwd=str(ROOT), env=_ffmpeg_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+
+    def _watch_detect():
+        global _detect_state, _detect_exit_code
+        for raw in _detect_proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if line:
+                with _detect_lock:
+                    _detect_log.append(line)
+        _detect_proc.wait()
+        with _detect_lock:
+            _detect_exit_code = _detect_proc.returncode
+            _detect_state = "done" if _detect_proc.returncode == 0 else "error"
+
+    threading.Thread(target=_watch_detect, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/detect/status")
+def api_detect_status():
+    with _detect_lock:
+        resp = {"state": _detect_state}
+        if _detect_exit_code is not None:
+            resp["exit_code"] = _detect_exit_code
+    return jsonify(resp)
+
+
+_transcript_cache: dict = {}   # f"{vod_id}_{peak_sec}" -> list[dict]
+
+
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    body = request.get_json(force=True) or {}
+    vod_id = app.config["VOD_ID"]
+    start_sec = float(body.get("start_sec", 0))
+    end_sec   = float(body.get("end_sec",   start_sec + 30))
+    peak_sec  = float(body.get("peak_sec",  start_sec))
+
+    cache_key = f"{vod_id}_{peak_sec}"
+    if cache_key in _transcript_cache:
+        return jsonify({"words": _transcript_cache[cache_key], "cached": True})
+
+    vod_path = (_work() / f"{vod_id}.mp4").resolve()
+    if not vod_path.exists():
+        return jsonify({"error": "VOD file not found"}), 404
+
+    duration = max(1.0, end_sec - start_sec)
+    tmp = Path(tempfile.mktemp(suffix=".wav"))
+    try:
+        subprocess.run(
+            ["/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "-y",
+             "-ss", f"{start_sec:.3f}", "-i", str(vod_path),
+             "-t", f"{duration:.3f}", "-vn", "-ac", "1", "-ar", "16000",
+             str(tmp)],
+            check=True, capture_output=True,
+        )
+        sys.path.insert(0, str(ROOT))
+        from stages.transcribe import transcribe as do_transcribe
+        words = do_transcribe(tmp)
+        word_dicts = [
+            {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}
+            for w in words
+        ]
+        _transcript_cache[cache_key] = word_dicts
+        return jsonify({"words": word_dicts, "cached": False})
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace")[:300] if e.stderr else ""
+        return jsonify({"error": f"ffmpeg: {stderr}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@app.route("/api/log")
+def api_log():
+    kind = request.args.get("type", "detect")
+    after = int(request.args.get("after", 0))
+    buf = _detect_log if kind == "detect" else _render_log
+    lock = _detect_lock if kind == "detect" else _render_lock
+    with lock:
+        lines = list(buf)
+    # return only lines after the given offset (for incremental polling)
+    return jsonify({"lines": lines[after:], "total": len(lines)})
+
+
+@app.route("/api/variants")
+def api_variants():
+    try:
+        sys.path.insert(0, str(ROOT))
+        from stages.cfg import load_global, load_variants
+        cfg = load_global()
+        variants = load_variants(cfg)
+        return jsonify(variants)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vod/set", methods=["POST"])
+def api_vod_set():
+    body = request.get_json(force=True) or {}
+    vod_id = body.get("vod_id", "").strip()
+    file_path = body.get("file_path", "").strip()
+
+    if not vod_id and not file_path:
+        return jsonify({"error": "provide vod_id or file_path"}), 400
+
+    # Derive vod_id from filename when only file_path given
+    if file_path and not vod_id:
+        vod_id = Path(file_path).stem.split("-")[0]
+
+    if not vod_id:
+        return jsonify({"error": "could not determine vod_id"}), 400
+
+    work = WORK / vod_id
+    work.mkdir(parents=True, exist_ok=True)
+
+    if file_path:
+        fp = Path(file_path).expanduser().resolve()
+        if not fp.exists():
+            return jsonify({"error": f"File not found: {file_path}"}), 400
+        link = work / f"{vod_id}.mp4"
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(fp)
+
+    app.config["VOD_ID"] = vod_id
+    return jsonify({"ok": True, "vod_id": vod_id})
+
+
+# ── entry point ───────────────────────────────────────────────────
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python gui.py <vod_id>")
+        sys.exit(1)
+
+    vod_id = sys.argv[1]
+    app.config["VOD_ID"] = vod_id
+
+    # Create work directory if it doesn't exist yet
+    work_dir = WORK / vod_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Auto-symlink the downloaded VOD if it isn't already in the work dir
+    link = work_dir / f"{vod_id}.mp4"
+    if not link.exists() and not link.is_symlink():
+        vods_dir = ROOT.parent / "vods"
+        matches = sorted(vods_dir.glob(f"{vod_id}*.mp4")) if vods_dir.is_dir() else []
+        if matches:
+            link.symlink_to(matches[0].resolve())
+            print(f"Linked VOD: {matches[0]}")
+
+    url = "http://localhost:5001"
+    # Open browser slightly after Flask starts
+    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    print(f"GUI starting at {url}  (vod_id={vod_id})")
+    app.run(host="0.0.0.0", port=5001, debug=False, use_reloader=False)
+
+
+if __name__ == "__main__":
+    main()

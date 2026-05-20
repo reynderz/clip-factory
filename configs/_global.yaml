@@ -1,0 +1,160 @@
+# Single config file. No more per-channel YAMLs — instead, the
+# `variants` section defines a matrix of renders. Every approved clip
+# gets rendered through every applicable variant.
+
+# ─── Streamer scenes ──────────────────────────────────────────────
+# Scene A = Gaming  (facecam bottom-left, screen/gameplay right).
+#   Source: 1456x816. Facecam: x=0 y=375 w=310 h=390 (bottom-left).
+#   Screen:          x=310 y=0 w=1146 h=816 (right side).
+# Scene B = Just Chatting (full-frame webcam, chat baked into right side).
+# Scene C = Watch Party   (chat sidebar left, video/anime center, webcam top-right).
+# Coords as fractions of source_resolution. Adjust after first render.
+layout:
+  source_resolution: [1456, 816]
+  scenes:
+    scene_a:
+      webcam:          {x: 0.0,    y: 0.4595, w: 0.2128, h: 0.4779}
+      gameplay:        {x: 0.2128, y: 0.0,    w: 0.7872, h: 1.0}
+      gameplay2:       {x: 0.2128, y: 0.5,    w: 0.7872, h: 0.5}   # dual_screen bottom crop default
+      obs_chat_region: {x: 0.2128, y: 0.0,    w: 0.7872, h: 1.0}
+    scene_b:
+      webcam:          {x: 0.0,  y: 0.0,  w: 0.57, h: 1.0}
+      gameplay:        null
+      obs_chat_region: {x: 0.57, y: 0.0,  w: 0.43, h: 1.0}
+      # NOTE: scene_b/c fractions were calibrated for 1920x1080. Recalibrate
+      # with calibrate.py if you still record Just Chatting / Watch Party.
+      face_center_x: 0.5
+      face_center_y: 0.5
+    scene_c:  # Watch Party / reaction — chat left, video center, webcam bottom-right
+      webcam:          {x: 0.79, y: 0.28, w: 0.19, h: 0.38}
+      gameplay:        {x: 0.27, y: 0.0,  w: 0.50, h: 1.0}
+      obs_chat_region: {x: 0.0,  y: 0.0,  w: 0.27, h: 1.0}
+
+# ─── Moment detection ─────────────────────────────────────────────
+detection:
+  chat_window_sec: 10
+  chat_min_msgs_per_sec: 1.0
+  audio_window_sec: 2
+  audio_peak_percentile: 88
+  clip_lead_sec: 8
+  clip_trail_sec: 4
+  min_gap_sec: 30
+  max_candidates_per_vod: 40
+
+# ─── Scene classifier ─────────────────────────────────────────────
+# LEFT  = scene_a obs_chat_region  (x 0.0 – 0.31)
+# RIGHT = scene_b obs_chat_region  (x 0.57 – 1.0)
+#
+# Decision:
+#   right − left > scene_b_right_lead  →  scene_b  (chat clearly on right)
+#   left > scene_c_left_min
+#     AND right > scene_a_right_min    →  scene_a  (both high = gaming)
+#   left > scene_c_left_min            →  scene_c  (chat left, right quiet = watch party)
+#   default                            →  scene_b
+scene:
+  sample_frames: 5
+  scene_b_right_lead: 0.010   # right must beat left by this margin → scene_b
+  scene_c_left_min:   0.025   # min left density to enter scene_c / scene_a branch
+  scene_a_right_min:  0.025   # if right is also this high when left > left_min → scene_a
+
+# ─── Chat-reading detection ───────────────────────────────────────
+chat_reading:
+  similarity_threshold: 48
+  chat_lookback_sec: 30
+  chat_lookahead_sec: 5
+  speech_window_before_sec: 6
+  speech_window_after_sec: 2
+  scan_stride_sec: 2
+  enabled: true
+
+# ─── Output (encoder + global resolution) ─────────────────────────
+output:
+  resolution: [1080, 1920]
+  fps: 30
+  crf: 20
+  dir: ./out
+  encoder: h264_videotoolbox          # Apple Silicon hardware encoder
+  videotoolbox_bitrate: "8M"
+
+# ─── Audio processing ─────────────────────────────────────────────
+audio:
+  # Loudnorm normalizes audio to TikTok's spec. Quiet streams get boosted,
+  # loud ones get attenuated, all clips end up perceptually consistent.
+  loudnorm:
+    enabled: true
+    target_lufs: -14.0     # TikTok / Spotify standard
+    target_tp: -1.0        # true-peak ceiling (dBFS)
+    target_lra: 11.0       # loudness range
+    boost_db: 3.0          # extra gain applied after loudnorm (raise if still quiet)
+  # Background music settings (used only by music-on variants).
+  music:
+    folder: "music"        # relative to project root; drop .mp3/.wav files in
+    volume_db: -18.0       # how loud relative to streamer's voice
+    duck_when_speaking: true   # auto-duck music when streamer talks (sidechain)
+    duck_amount_db: -8.0       # extra reduction during speech
+
+# ─── Profanity censor ─────────────────────────────────────────────
+# Detected curse words are muted and replaced with an 880 Hz discord ping.
+# Requires a word-level transcript (auto-transcribed or edited in the GUI).
+censor:
+  enabled: true
+  pad_sec: 0.05           # silence padding around each word (seconds)
+  extra_words: []         # add your own: [frick, heck, ...]
+  exclude_words: []       # remove false positives: [ass, damn, ...]
+
+# ─── Subtitle style (one global style; not per-variant) ───────────
+# Keep it simple: every variant uses the same subs. If you want per-variant
+# subs later, this can move into the variant entry.
+subs:
+  font: "Komika Axis"
+  font_size: 90
+  primary_color: "&H00FFFFFF"
+  highlight_color: "&H0000FFFF"
+  outline_color: "&H00000000"
+  outline: 5
+  shadow: 2
+  all_caps: true
+  position_y_frac: 0.75
+  max_words_per_line: 4
+
+# ─── Chat overlay style (used when overlay is "on") ───────────────
+chat_overlay:
+  position_y_frac: 0.50
+  fade_sec: 0.25
+  font_size: 44
+  lead_sec: 0.5
+  visible_sec: 4.5
+
+# ─── EXPORT MODES ─────────────────────────────────────────────────
+# Four modes, selectable in the render modal.
+#
+#   raw        : stream-copy cut — original resolution, no processing
+#   full_frame : entire 16:9 frame → 9:16 with gaussian blur fill
+#   fill       : user-drawn crop box → 9:16 with gaussian blur fill
+#                (requires game_crop set on clip via Edit → Fill mode)
+#   dual       : two user-drawn boxes stacked 50/50, each with blur fill
+#                (requires game_crop + game_crop2 via Edit → Dual mode)
+
+variants:
+  - {name: raw,              layout: raw,           apply_to: both, chat_overlay: off, music: off}
+  - {name: full_frame,       layout: full_frame,    apply_to: both, chat_overlay: off, music: off}
+  - {name: full_frame_music, layout: full_frame,    apply_to: both, chat_overlay: off, music: on}
+  - {name: gameplay,         layout: gameplay_fill, apply_to: both, chat_overlay: off, music: off}
+  - {name: gameplay_music,   layout: gameplay_fill, apply_to: both, chat_overlay: off, music: on}
+  - {name: fill,             layout: crop_fill,     apply_to: both, chat_overlay: off, music: off}
+  - {name: fill_music,       layout: crop_fill,     apply_to: both, chat_overlay: off, music: on}
+  - {name: dual,             layout: dual_crop,     apply_to: both, chat_overlay: off, music: off}
+  - {name: dual_music,       layout: dual_crop,     apply_to: both, chat_overlay: off, music: on}
+
+# ─── Brainrot defaults (apply to all brainrot variants) ───────────
+brainrot:
+  webcam_top_frac: 0.5
+  swap: false
+
+# ─── Intro sound effect (plays at t=0 of every rendered clip) ─────
+# Drop the audio file into music/ then set the path below.
+# Set enabled: false to disable without removing the file.
+intro_sound:
+  enabled: true
+  path: "music/intro_sfx.mp3"
+  volume_db: 0.0     # raise/lower if the sfx is too quiet or too loud

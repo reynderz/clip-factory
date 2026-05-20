@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# VOD data — personal, large, never commit
+work/
+out/
+vods/
+
+# Music — copyrighted MP3s
+music/*.mp3
+music/*.wav
+music/*.m4a
+music/*.aac
+music/*.ogg
+music/*.flac
+
+# Filler videos — copyrighted, too large for GitHub
+fillers/**/*.mp4
+fillers/**/*.mkv
+fillers/**/*.mov
+fillers/**/*.avi
+
+# macOS
+.DS_Store
+
+# Partial downloads
+*.part
+*.ytdl
+*.crdownload
