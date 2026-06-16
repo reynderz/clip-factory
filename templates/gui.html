@@ -49,6 +49,11 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
+#add-candidate-form {
+  padding: 10px 12px;
+  border-top: 1px solid #374151;
+  margin-top: auto;
+}
 #panel-left h2 {
   font-size: 12px;
   font-weight: 600;
@@ -176,6 +181,26 @@ body {
   background: #ef4444;
   pointer-events: none;
 }
+.timeline-cut {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(239,68,68,0.55);
+  pointer-events: none;
+}
+#cuts-list {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+.cut-tag {
+  display: flex; align-items: center; gap: 4px;
+  background: #450a0a; border: 1px solid #ef4444;
+  border-radius: 4px; padding: 2px 7px; font-size: 11px; color: #fca5a5;
+}
+.cut-tag button {
+  background: none; border: none; color: #ef4444; cursor: pointer;
+  font-size: 12px; padding: 0; line-height: 1;
+}
+.btn-cut { background: #450a0a; color: #fca5a5; border: 1px solid #ef4444; }
+.btn-cut:hover { background: #7f1d1d; }
 
 /* ── Subtitles section ── */
 #subs-section { background: #1f2937; border-radius: 8px; overflow: hidden; }
@@ -233,7 +258,9 @@ body {
   transition: background 0.12s;
 }
 .chat-option:hover { background: #2d3748; }
-.chat-option input[type="radio"] { margin-top: 2px; accent-color: #6366f1; flex-shrink: 0; }
+.chat-option input[type="radio"] { display: none; }
+.chat-option input[type="checkbox"] { margin-top: 2px; accent-color: #6366f1; flex-shrink: 0; width: 15px; height: 15px; cursor: pointer; }
+.chat-option.selected { background: #1e2a45; outline: 1px solid #6366f1; }
 .chat-meta { font-size: 11px; color: #6b7280; }
 .chat-user { font-weight: 700; color: #818cf8; }
 .chat-text { font-size: 13px; color: #f9fafb; line-height: 1.4; }
@@ -297,6 +324,16 @@ body {
 .word-chip.censored { background: #450a0a; border-color: #ef4444; }
 .word-chip.censored .word-text { color: #fca5a5; }
 .word-chip.censored .word-censor-btn { color: #ef4444; }
+.word-sfx-btn { font-size: 11px; cursor: pointer; padding: 0 2px; line-height: 1; border: none; background: none; color: #4b5563; flex-shrink: 0; }
+.word-sfx-btn:hover { color: #a78bfa; }
+.word-chip.has-sfx { border-color: #7c3aed; background: #1e1040; }
+.word-chip.has-sfx .word-sfx-btn { color: #a78bfa; }
+.sfx-picker-wrap { position: relative; display: inline-flex; }
+.sfx-picker-drop { position: absolute; top: calc(100% + 4px); left: 0; z-index: 500; background: #1f2937; border: 1px solid #4b5563; border-radius: 8px; min-width: 180px; max-height: 220px; overflow-y: auto; box-shadow: 0 8px 24px #0008; padding: 4px 0; }
+.sfx-picker-drop button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: none; border: none; color: #f9fafb; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.sfx-picker-drop button:hover { background: #374151; }
+.sfx-picker-drop button.sfx-active { color: #a78bfa; font-weight: 700; }
+.sfx-picker-drop .sfx-clear { color: #f87171; }
 .word-placeholder { font-size: 12px; color: #4b5563; font-style: italic; padding: 6px 2px; }
 #transcript-toolbar { display: flex; gap: 6px; align-items: center; }
 .btn-next { background: #374151; color: #f9fafb; }
@@ -366,6 +403,7 @@ body {
 .approved-card {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   background: #374151;
   border-radius: 6px;
@@ -375,6 +413,7 @@ body {
   border: 2px solid transparent;
   transition: border-color 0.12s;
 }
+.approved-title { font-size: 11px; color: #a5b4fc; flex-basis: 100%; padding-left: 28px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: -2px; }
 .approved-card:hover { border-color: #4b5563; }
 .approved-card.selected { border-color: #6366f1; }
 .approved-num { font-size: 11px; color: #6366f1; font-weight: 700; min-width: 22px; }
@@ -636,6 +675,15 @@ kbd {
       <kbd>Y</kbd> approve &nbsp;
       <kbd>N</kbd> skip
     </div>
+    <div id="add-candidate-form">
+      <span style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;font-weight:600">Add candidate</span>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="add-cand-ts" type="text" placeholder="1:23:45 or 5030s"
+          style="flex:1;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:6px;padding:5px 8px;font-size:12px;outline:none">
+        <button id="btn-add-cand" class="btn btn-sm" style="background:#6366f1;color:#fff;white-space:nowrap">+ Add</button>
+      </div>
+      <div id="add-cand-err" style="font-size:11px;color:#ef4444;margin-top:4px;display:none"></div>
+    </div>
   </div>
 
   <!-- ─── Center: Editor ─── -->
@@ -661,17 +709,28 @@ kbd {
         <label>Start</label>
         <input type="range" id="trim-start" min="0" max="100" step="0.01" value="0">
         <span class="trim-time" id="trim-start-label">0:00.00</span>
+        <button class="btn btn-sm btn-ghost" id="btn-extend-start-5" title="Move start 5 s earlier">−5s</button>
+        <button class="btn btn-sm btn-ghost" id="btn-extend-start-10" title="Move start 10 s earlier">−10s</button>
       </div>
       <div class="trim-row">
         <label>End</label>
         <input type="range" id="trim-end" min="0" max="100" step="0.01" value="100">
         <span class="trim-time" id="trim-end-label">0:00.00</span>
+        <button class="btn btn-sm btn-ghost" id="btn-extend-end-5" title="Move end 5 s later">+5s</button>
+        <button class="btn btn-sm btn-ghost" id="btn-extend-end-10" title="Move end 10 s later">+10s</button>
       </div>
       <div id="timeline-strip">
         <div id="timeline-window"></div>
         <div id="timeline-peak"></div>
         <div id="timeline-playhead"></div>
+        <div id="timeline-cuts"></div>
       </div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm btn-cut" id="btn-cut-start">✂ Mark cut start</button>
+        <button class="btn btn-sm btn-cut" id="btn-cut-end" disabled>✂ Mark cut end</button>
+        <span id="cut-start-label" style="font-size:11px;color:#9ca3af"></span>
+      </div>
+      <div id="cuts-list"></div>
     </div>
 
     <!-- Subtitle settings -->
@@ -683,8 +742,8 @@ kbd {
       <div id="subs-body" class="open">
         <div class="subs-row">
           <label>Font size</label>
-          <input type="range" id="subs-size" min="40" max="150" step="1" value="90">
-          <span class="val" id="subs-size-val">90</span>
+          <input type="range" id="subs-size" min="40" max="200" step="1" value="110">
+          <span class="val" id="subs-size-val">110</span>
         </div>
         <div class="subs-row">
           <label>Primary color</label>
@@ -752,13 +811,25 @@ kbd {
     </div>
 
     <div id="chat-section" style="display:none">
-      <h3>Chat Overlay</h3>
+      <h3>Chat Overlay
+        <span style="font-size:10px;font-weight:400;color:#6b7280;text-transform:none">— vink aan om toe te voegen, nogmaals om te verwijderen</span>
+        <button class="btn btn-sm btn-ghost" id="btn-chat-for-clip" style="margin-left:8px;font-size:11px" title="Load all chat messages in the current trim window">↻ Chat voor clip</button>
+      </h3>
       <div id="chat-options">
-        <div class="chat-option" id="chat-none-opt">
-          <input type="radio" name="chat-msg" value="none" id="radio-none" checked>
-          <label for="radio-none" style="cursor:pointer">No overlay</label>
-        </div>
         <div id="chat-loading">Loading messages…</div>
+      </div>
+    </div>
+
+    <!-- Title overlay -->
+    <div id="title-section" style="display:none;background:#1f2937;border-radius:8px;padding:12px 14px;margin-top:8px">
+      <h3 style="font-size:12px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Title Overlay</h3>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="title-enabled" style="accent-color:#6366f1;width:16px;height:16px;flex-shrink:0;cursor:pointer">
+        <label for="title-enabled" style="font-size:13px;color:#d1d5db;cursor:pointer">Burn title onto clip</label>
+      </div>
+      <div id="title-input-wrap" style="display:none;margin-top:8px">
+        <input type="text" id="title-text" placeholder="Enter clip title…"
+          style="width:100%;box-sizing:border-box;background:#111827;color:#f9fafb;border:1px solid #374151;border-radius:6px;padding:6px 10px;font-size:13px;outline:none">
       </div>
     </div>
 
@@ -814,11 +885,19 @@ kbd {
       <h2>Select VOD</h2>
       <button class="modal-close" id="btn-vod-close">✕</button>
     </div>
-    <div class="vod-type-row">
-      <label class="radio-label"><input type="radio" name="vod-type" value="twitch" checked> Twitch VOD ID</label>
-      <label class="radio-label"><input type="radio" name="vod-type" value="local"> Local .mp4 file path</label>
+    <div id="vod-file-list" style="margin-bottom:12px">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">Downloaded VODs</div>
+      <div id="vod-file-items" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto">
+        <div style="color:#6b7280;font-size:12px">Loading…</div>
+      </div>
     </div>
-    <input type="text" id="vod-input" class="text-input" placeholder="e.g. 2760106149  or  /Users/…/file.mp4">
+    <div style="border-top:1px solid #374151;padding-top:12px;margin-top:4px">
+      <div class="vod-type-row">
+        <label class="radio-label"><input type="radio" name="vod-type" value="twitch" checked> Twitch VOD ID</label>
+        <label class="radio-label"><input type="radio" name="vod-type" value="local"> Local .mp4 path</label>
+      </div>
+      <input type="text" id="vod-input" class="text-input" placeholder="e.g. 2760106149  or  /Users/…/file.mp4">
+    </div>
     <div id="vod-msg" class="modal-msg"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btn-vod-cancel">Cancel</button>
@@ -856,6 +935,11 @@ kbd {
         <div><div class="export-opt-name">✂ Raw cut</div>
              <div class="export-opt-desc">Stream copy — original resolution, no processing</div></div>
       </label>
+      <label class="export-opt" id="opt-webcam">
+        <input type="checkbox" id="exp-webcam">
+        <div><div class="export-opt-name">📷 Webcam</div>
+             <div class="export-opt-desc">Face cam → 9:16 with blurred background</div></div>
+      </label>
       <label class="export-opt checked" id="opt-full-frame">
         <input type="checkbox" id="exp-full-frame" checked>
         <div><div class="export-opt-name">🖼 Full frame</div>
@@ -866,6 +950,12 @@ kbd {
         <div><div class="export-opt-name">🎮 Gameplay</div>
              <div class="export-opt-desc">Green crop box → 9:16 with blur fill (no webcam).</div>
              <div class="export-warn" id="gameplay-warn" style="display:none">⚠ No gameplay box set — draw the green box in Edit first</div></div>
+      </label>
+      <label class="export-opt" id="opt-gameplay-zoom">
+        <input type="checkbox" id="exp-gameplay-zoom">
+        <div><div class="export-opt-name">🔍 Gameplay (zoom fill)</div>
+             <div class="export-opt-desc">Green crop box → 9:16 zoomed to fill, no bars.</div>
+             <div class="export-warn" id="gameplay-zoom-warn" style="display:none">⚠ No gameplay box set — draw the green box in Edit first</div></div>
       </label>
       <label class="export-opt checked" id="opt-fill">
         <input type="checkbox" id="exp-fill" checked>
@@ -884,14 +974,48 @@ kbd {
         <div><div class="export-opt-name" style="color:#c084fc">🎵 Add music</div>
              <div class="export-opt-desc">Applies to Full frame, Fill and Dual — not Raw</div></div>
       </label>
+      <label class="export-opt" id="opt-chat" style="border-color:#06b6d4;margin-top:4px">
+        <input type="checkbox" id="exp-chat" style="accent-color:#06b6d4">
+        <div>
+          <div class="export-opt-name" style="color:#67e8f9">💬 Add chat overlay</div>
+          <div class="export-opt-desc">Shows the selected chat message on clips that have one picked</div>
+          <div style="margin-top:6px;display:flex;align-items:center;gap:6px;font-size:11px;color:#9ca3af">
+            <span>Position</span>
+            <div style="display:flex;gap:4px">
+              <button class="chat-pos-btn active" data-frac="0.12" style="background:#06b6d4;color:#fff;border:1px solid #06b6d4;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer">Top</button>
+              <button class="chat-pos-btn" data-frac="0.50" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer">Middle</button>
+              <button class="chat-pos-btn" data-frac="0.73" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer">Bottom</button>
+            </div>
+          </div>
+        </div>
+      </label>
       <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#9ca3af">
         <span>Subtitle position</span>
         <div style="display:flex;gap:4px">
-          <button class="subs-pos-btn" data-frac="0.25" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Top</button>
+          <button class="subs-pos-btn" data-frac="0.23" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Top</button>
           <button class="subs-pos-btn" data-frac="0.50" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Middle</button>
-          <button class="subs-pos-btn active" data-frac="0.75" style="background:#6366f1;color:#fff;border:1px solid #6366f1;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Bottom</button>
+          <button class="subs-pos-btn active" data-frac="0.73" style="background:#6366f1;color:#fff;border:1px solid #6366f1;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer">Bottom</button>
         </div>
       </div>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#9ca3af;flex-wrap:wrap">
+        <span>Subtitle font</span>
+        <div style="display:flex;gap:4px">
+          <button class="subs-font-btn active" data-font="Komika Axis" style="background:#6366f1;color:#fff;border:1px solid #6366f1;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'Komika Axis',sans-serif">Komika</button>
+          <button class="subs-font-btn" data-font="Impact" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:Impact,sans-serif">Impact</button>
+          <button class="subs-font-btn" data-font="Arial Bold" style="background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'Arial Bold','Arial',sans-serif;font-weight:bold">Arial Bold</button>
+        </div>
+        <span style="margin-left:4px">Size</span>
+        <input type="number" id="subs-font-size" value="110" min="40" max="200" step="5"
+          style="width:60px;background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:4px;padding:3px 6px;font-size:11px">
+      </div>
+    </div>
+
+    <!-- Song picker (shown only for solo clip renders) -->
+    <div id="song-picker-section" style="display:none;margin-top:10px">
+      <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">🎵 Song (for music variants)</div>
+      <select id="song-select" style="width:100%;background:#374151;color:#f9fafb;border:1px solid #4b5563;border-radius:6px;padding:6px 10px;font-size:13px">
+        <option value="">Random</option>
+      </select>
     </div>
 
     <!-- Inline progress (shown during render) -->
@@ -957,6 +1081,14 @@ kbd {
       <div class="layout-opt-text">
         <div class="layout-opt-name">Discord ping at start</div>
         <div class="layout-opt-desc">Short notification sound at the beginning of the clip</div>
+      </div>
+    </label>
+    <label class="layout-opt" style="cursor:pointer;margin-bottom:0">
+      <input type="checkbox" id="edit-stinger" style="accent-color:#6366f1;width:16px;height:16px;flex-shrink:0">
+      <div class="layout-opt-icon">🎬</div>
+      <div class="layout-opt-text">
+        <div class="layout-opt-name">Add stinger at end</div>
+        <div class="layout-opt-desc">Appends stingers/stinger.mp4 after this clip — webcam slot for split layouts, blurred background for gameplay-only</div>
       </div>
     </label>
 
@@ -1036,15 +1168,20 @@ let state = {
   trimStart: 0,
   trimEnd: 0,
   peak: 0,
+  cuts: [],          // [{start, end}] clip-relative seconds to REMOVE
+  cutMarkStart: null, // pending cut start (clip-relative)
   cropBox: null,     // {x,y,w,h} as fractions, or null
   faceCenter: {x: 0.5, y: 0.5, zoom: 1.0},  // per-clip centering + zoom
   editCamBox:   null,   // per-clip webcam region override {x,y,w,h} fractions
   editGameBox:  null,   // per-clip gameplay region override (top) {x,y,w,h} fractions
   editGameBox2: null,   // per-clip gameplay2 region override (bottom) {x,y,w,h} fractions
   discordSound: false,  // per-clip Discord ping at start
+  stinger: false,       // per-clip stinger appended at end
   layoutMode: 'face_only',   // 'face_only' | 'include_gameplay' | 'dual_screen'
-  chatMsgs: [],      // [{user,text,offset_sec,score}]
-  selectedMsg: null, // {user,text,offset_sec} or null
+  chatMsgs: [],       // [{user,text,offset_sec,score}]
+  selectedMsgs: [],   // [{user,text,offset_sec}] — ordered by offset_sec
+  clipTitle: '',
+  titleEnabled: false,
   subs: {
     font_size: 90,
     primary_color: "&H00FFFFFF",
@@ -1130,6 +1267,53 @@ function renderCandidateList() {
   });
 }
 
+// ── Manual candidate ─────────────────────────────────────────────
+function parseTimestamp(raw) {
+  // Accepts: "1:23:45", "23:45", "5030", "5030s", "5030.5"
+  const s = raw.trim().replace(/s$/i, '');
+  const parts = s.split(':').map(Number);
+  if (parts.some(isNaN)) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 1 && isFinite(parts[0])) return parts[0];
+  return null;
+}
+
+document.getElementById('btn-add-cand').addEventListener('click', async () => {
+  const raw = document.getElementById('add-cand-ts').value;
+  const errEl = document.getElementById('add-cand-err');
+  errEl.style.display = 'none';
+  const start = parseTimestamp(raw);
+  if (start === null || start < 0) {
+    errEl.textContent = 'Ongeldige timestamp — gebruik bijv. 1:23:45 of 5030';
+    errEl.style.display = 'block';
+    return;
+  }
+  const res = await fetch('/api/candidates/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({start_sec: start}),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    errEl.textContent = data.error || 'Fout bij toevoegen';
+    errEl.style.display = 'block';
+    return;
+  }
+  document.getElementById('add-cand-ts').value = '';
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.candidates = fresh.candidates || [];
+  state.approved   = fresh.approved  || [];
+  renderCandidateList();
+  // Jump straight to the new candidate
+  const newIdx = state.candidates.findIndex(c => Math.abs(c.peak_sec - data.candidate.peak_sec) < 0.5);
+  if (newIdx >= 0) selectCandidate(newIdx);
+});
+
+document.getElementById('add-cand-ts').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('btn-add-cand').click();
+});
+
 function selectCandidate(idx, forceApprovedClip = null) {
   if (idx < 0 || idx >= state.candidates.length) return;
   state.selectedIdx = idx;
@@ -1148,12 +1332,20 @@ function selectCandidate(idx, forceApprovedClip = null) {
   document.getElementById('subs-section').style.display = 'block';
   document.getElementById('transcript-section').style.display = 'block';
   document.getElementById('chat-section').style.display = 'block';
+  document.getElementById('title-section').style.display = 'block';
   document.getElementById('action-bar').style.display = 'flex';
   document.getElementById('panel-center').scrollTop = 0;
 
   // Load per-clip edit settings (from approved entry if present, else candidate)
   const editSrc = forceApprovedClip || state.approved.find(a => Math.abs(a.peak_sec - c.peak_sec) < 0.01) || c;
   state.editingApprovedPeak = forceApprovedClip ? forceApprovedClip.peak_sec : (editSrc !== c ? editSrc.peak_sec : null);
+
+  // Load cuts for this clip (from approved data)
+  state.cuts = (editSrc.cuts || []).map(c => ({...c}));
+  state.cutMarkStart = null;
+  document.getElementById('btn-cut-end').disabled = true;
+  document.getElementById('cut-start-label').textContent = '';
+  renderCutsList();
 
   state.faceCenter = editSrc.face_center ? {...editSrc.face_center} : {x: 0.5, y: 0.5, zoom: 1.0};
   if (state.faceCenter.zoom === undefined) state.faceCenter.zoom = 1.0;
@@ -1164,6 +1356,14 @@ function selectCandidate(idx, forceApprovedClip = null) {
   state.editGameBox  = editSrc.game_crop  ? {...editSrc.game_crop}  : {..._defGame};
   state.editGameBox2 = editSrc.game_crop2 ? {...editSrc.game_crop2} : {..._defGame2};
   state.discordSound = editSrc.discord_sound === true;
+  state.stinger      = editSrc.stinger === true;
+
+  // Restore title state
+  state.titleEnabled = !!editSrc.title;
+  state.clipTitle = editSrc.title || '';
+  document.getElementById('title-enabled').checked = state.titleEnabled;
+  document.getElementById('title-text').value = state.clipTitle;
+  document.getElementById('title-input-wrap').style.display = state.titleEnabled ? 'block' : 'none';
 
   // Show approved preview panel only when this clip is already approved
   const isApprovedClip = !!state.approved.find(a => Math.abs(a.peak_sec - editSrc.peak_sec) < 0.01);
@@ -1190,13 +1390,18 @@ function selectCandidate(idx, forceApprovedClip = null) {
     const dur = player.duration;
     if (!isFinite(dur) || dur <= 0) return;
     state.videoDuration = dur;
-    const trimMin = Math.max(0, c.start_sec - 30);
-    const trimMax = Math.min(dur, c.end_sec + 30);
-    state.trimMin = trimMin; state.trimMax = trimMax;
     const existing = state.approved.find(
       a => Math.abs(a.peak_sec - c.peak_sec) < 0.01);
     state.trimStart = existing ? existing.start_sec : c.start_sec;
     state.trimEnd   = existing ? existing.end_sec   : c.end_sec;
+    // Restore saved trim window (from extend buttons) if present, else ±30 s default
+    const trimMin = (existing && existing.trim_min != null)
+      ? Math.min(existing.trim_min, state.trimStart)
+      : Math.max(0, state.trimStart - 30);
+    const trimMax = (existing && existing.trim_max != null)
+      ? Math.max(existing.trim_max, state.trimEnd)
+      : Math.min(dur, state.trimEnd + 30);
+    state.trimMin = trimMin; state.trimMax = trimMax;
     trimStartEl.min = trimMin; trimStartEl.max = trimMax; trimStartEl.step = 0.01;
     trimEndEl.min   = trimMin; trimEndEl.max   = trimMax; trimEndEl.step   = 0.01;
     trimStartEl.value = state.trimStart;
@@ -1213,14 +1418,21 @@ function selectCandidate(idx, forceApprovedClip = null) {
   }
 
   // ── Chat messages ─────────────────────────────────────────────────
-  loadChatMessages(c.peak_sec, c);
+  // When editing an approved clip, load messages from its actual window
+  // so the user can pick one directly without clicking "Chat voor clip".
+  if (forceApprovedClip) {
+    loadChatMessages(forceApprovedClip.peak_sec, forceApprovedClip,
+                     Math.max(0, forceApprovedClip.start_sec - 30), forceApprovedClip.end_sec);
+  } else {
+    loadChatMessages(c.peak_sec, c);
+  }
 }
 
 // ── Subs handling ─────────────────────────────────────────────────
 function loadSubsFromClip(c) {
   const subs = c.subs || {};
   state.subs = {
-    font_size:         subs.font_size        ?? 90,
+    font_size:         subs.font_size        ?? 110,
     primary_color:     subs.primary_color    ?? "&H00FFFFFF",
     highlight_color:   subs.highlight_color  ?? "&H0000FFFF",
     position_y_frac:   subs.position_y_frac  ?? 0.75,
@@ -1323,6 +1535,57 @@ trimEndEl.addEventListener('input', () => {
   updateTimeline();
 });
 
+function extendTrimStart(sec) {
+  if (!state.videoDuration) return;
+  state.trimStart = Math.max(0, state.trimStart - sec);
+  state.trimMin   = Math.max(0, state.trimMin   - sec);
+  trimStartEl.min   = state.trimMin;
+  trimEndEl.min     = state.trimMin;
+  trimStartEl.value = state.trimStart;
+  trimStartLbl.textContent = fmtTime(state.trimStart);
+  player.currentTime = state.trimStart;
+  updateTimeline();
+  _autoSaveExtend();
+}
+
+function extendTrimEnd(sec) {
+  if (!state.videoDuration) return;
+  state.trimEnd = Math.min(state.videoDuration, state.trimEnd + sec);
+  state.trimMax = Math.min(state.videoDuration, state.trimMax + sec);
+  trimEndEl.max   = state.trimMax;
+  trimStartEl.max = state.trimMax;
+  trimEndEl.value = state.trimEnd;
+  trimEndLbl.textContent = fmtTime(state.trimEnd);
+  player.currentTime = state.trimEnd;
+  updateTimeline();
+  _autoSaveExtend();
+}
+
+// Auto-save trim_min/trim_max to already-approved clip so extension persists.
+async function _autoSaveExtend() {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const peakToMatch = state.editingApprovedPeak !== null
+    ? state.editingApprovedPeak : c.peak_sec;
+  const approved = state.approved.find(
+    a => Math.abs(a.peak_sec - peakToMatch) < 0.01);
+  if (!approved) return;   // not yet approved — will save when user approves
+  approved.trim_min = state.trimMin;
+  approved.trim_max = state.trimMax;
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(approved),
+  });
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+}
+
+document.getElementById('btn-extend-start-5').addEventListener('click',  () => extendTrimStart(5));
+document.getElementById('btn-extend-start-10').addEventListener('click', () => extendTrimStart(10));
+document.getElementById('btn-extend-end-5').addEventListener('click',    () => extendTrimEnd(5));
+document.getElementById('btn-extend-end-10').addEventListener('click',   () => extendTrimEnd(10));
+
 function updateTrimLabels() {
   trimStartLbl.textContent = fmtTime(state.trimStart);
   trimEndLbl.textContent   = fmtTime(state.trimEnd);
@@ -1338,7 +1601,61 @@ function updateTimeline() {
   timelineWin.style.left  = startPct + '%';
   timelineWin.style.width = (endPct - startPct) + '%';
   timelinePeak.style.left = Math.max(0, Math.min(100, peakPct)) + '%';
+
+  // Draw cut regions
+  const cutsContainer = document.getElementById('timeline-cuts');
+  cutsContainer.innerHTML = '';
+  for (const cut of state.cuts) {
+    const absS = state.trimStart + cut.start;
+    const absE = state.trimStart + cut.end;
+    const s = Math.max(0, Math.min(100, (absS - state.trimMin) / span * 100));
+    const e = Math.max(0, Math.min(100, (absE - state.trimMin) / span * 100));
+    const el = document.createElement('div');
+    el.className = 'timeline-cut';
+    el.style.left = s + '%';
+    el.style.width = (e - s) + '%';
+    cutsContainer.appendChild(el);
+  }
 }
+
+// ── Jump cuts ─────────────────────────────────────────────────────
+function renderCutsList() {
+  const list = document.getElementById('cuts-list');
+  list.innerHTML = '';
+  state.cuts.forEach((cut, i) => {
+    const tag = document.createElement('div');
+    tag.className = 'cut-tag';
+    tag.innerHTML = `✂ ${fmtTime(cut.start)}–${fmtTime(cut.end)}
+      <button title="Remove cut">×</button>`;
+    tag.querySelector('button').addEventListener('click', () => {
+      state.cuts.splice(i, 1);
+      renderCutsList();
+      updateTimeline();
+    });
+    list.appendChild(tag);
+  });
+}
+
+document.getElementById('btn-cut-start').addEventListener('click', () => {
+  const clipT = player.currentTime - state.trimStart;
+  state.cutMarkStart = Math.max(0, clipT);
+  document.getElementById('cut-start-label').textContent =
+    `Cut start: ${fmtTime(state.cutMarkStart)}`;
+  document.getElementById('btn-cut-end').disabled = false;
+});
+
+document.getElementById('btn-cut-end').addEventListener('click', () => {
+  if (state.cutMarkStart === null) return;
+  const clipT = player.currentTime - state.trimStart;
+  const cutEnd = Math.max(state.cutMarkStart + 0.1, clipT);
+  state.cuts.push({ start: state.cutMarkStart, end: cutEnd });
+  state.cuts.sort((a, b) => a.start - b.start);
+  state.cutMarkStart = null;
+  document.getElementById('cut-start-label').textContent = '';
+  document.getElementById('btn-cut-end').disabled = true;
+  renderCutsList();
+  updateTimeline();
+});
 
 player.addEventListener('timeupdate', () => {
   const span = state.trimMax - state.trimMin;
@@ -1364,46 +1681,143 @@ document.getElementById('btn-split').addEventListener('click', () => {
   const c   = state.candidates[state.selectedIdx];
   const cut = Math.round(player.currentTime * 100) / 100;
 
-  if (cut <= c.start_sec + 0.5 || cut >= c.end_sec - 0.5) {
-    alert('Scrub the video to the point where you want to cut, then click Split.');
+  // Allow splitting anywhere in the full available window [trimMin, trimMax],
+  // which includes any extra seconds unlocked with the extend buttons.
+  const rangeStart = state.trimMin;
+  const rangeEnd   = state.trimMax;
+
+  if (cut <= rangeStart + 0.1 || cut >= rangeEnd - 0.1) {
+    alert('Scrub to where you want to cut — must be inside the available clip range.');
     return;
   }
 
-  // Keep the peak_sec in whichever half it belongs to
+  // The two new clips cover [trimStart…cut] and [cut…trimEnd], but we
+  // expand the boundaries to the full window so trimming still works.
   const first = {
     ...c,
-    end_sec:  cut,
-    peak_sec: c.peak_sec < cut ? c.peak_sec : (c.start_sec + cut) / 2,
+    start_sec: state.trimStart,
+    end_sec:   cut,
+    peak_sec:  c.peak_sec >= state.trimStart && c.peak_sec < cut
+                 ? c.peak_sec
+                 : (state.trimStart + cut) / 2,
   };
   const second = {
     ...c,
     start_sec: cut,
-    peak_sec: c.peak_sec > cut ? c.peak_sec : (cut + c.end_sec) / 2,
+    end_sec:   state.trimEnd,
+    peak_sec:  c.peak_sec >= cut && c.peak_sec <= state.trimEnd
+                 ? c.peak_sec
+                 : (cut + state.trimEnd) / 2,
   };
 
   state.candidates.splice(state.selectedIdx, 1, first, second);
   renderCandidateList();
-  selectCandidate(state.selectedIdx); // select the first half
+  selectCandidate(state.selectedIdx);
 });
 
 
 
+// ── Title overlay ─────────────────────────────────────────────────
+let _titleSaveTimer = null;
+
+async function _saveTitleToApproved() {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const peakToMatch = state.editingApprovedPeak !== null ? state.editingApprovedPeak : c.peak_sec;
+  const approved = state.approved.find(a => Math.abs(a.peak_sec - peakToMatch) < 0.01);
+  if (!approved) return;
+  if (state.titleEnabled && state.clipTitle.trim()) {
+    approved.title = state.clipTitle.trim();
+  } else {
+    delete approved.title;
+  }
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(approved),
+  });
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+  renderApprovedList();
+}
+
+document.getElementById('title-enabled').addEventListener('change', (e) => {
+  state.titleEnabled = e.target.checked;
+  document.getElementById('title-input-wrap').style.display = state.titleEnabled ? 'block' : 'none';
+  if (state.titleEnabled) document.getElementById('title-text').focus();
+  _saveTitleToApproved();
+});
+
+document.getElementById('title-text').addEventListener('input', (e) => {
+  state.clipTitle = e.target.value;
+  clearTimeout(_titleSaveTimer);
+  _titleSaveTimer = setTimeout(_saveTitleToApproved, 600);
+});
+
 // ── Chat messages ─────────────────────────────────────────────────
-async function loadChatMessages(peak_sec, cand) {
+async function _saveChatMsgToApproved() {
+  // Auto-save chat_message change to already-approved clip
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const peakToMatch = state.editingApprovedPeak !== null ? state.editingApprovedPeak : c.peak_sec;
+  const approved = state.approved.find(a => Math.abs(a.peak_sec - peakToMatch) < 0.01);
+  if (!approved) return;
+  const _msgs = state.selectedMsgs.map(m => ({user: m.user, text: m.text, offset_sec: m.offset_sec}));
+  approved.chat_messages = _msgs.length > 0 ? _msgs : undefined;
+  approved.chat_message  = _msgs.length > 0 ? _msgs[0] : undefined;
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(approved),
+  });
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+  renderApprovedList();
+}
+
+function _setChatSelection(msg) {
+  // Toggle a single message in/out of the selection array
+  if (!msg) { state.selectedMsgs = []; }
+  else {
+    const exists = state.selectedMsgs.some(s => s.user === msg.user && Math.abs(s.offset_sec - msg.offset_sec) < 0.1);
+    if (exists) state.selectedMsgs = state.selectedMsgs.filter(s => !(s.user === msg.user && Math.abs(s.offset_sec - msg.offset_sec) < 0.1));
+    else { state.selectedMsgs.push(msg); state.selectedMsgs.sort((a, b) => a.offset_sec - b.offset_sec); }
+  }
+  document.querySelectorAll('.chat-option').forEach(o => {
+    const cb = o.querySelector('input[type="checkbox"]');
+    if (!cb || cb.dataset.idx === undefined) return;
+    const m = state.chatMsgs[parseInt(cb.dataset.idx)];
+    const sel = m && state.selectedMsgs.some(s => s.user === m.user && Math.abs(s.offset_sec - m.offset_sec) < 0.1);
+    cb.checked = !!sel;
+    o.classList.toggle('selected', !!sel);
+  });
+  _saveChatMsgToApproved();
+}
+
+// Load chat for the full trim window (start_sec → end_sec) instead of peak
+document.getElementById('btn-chat-for-clip').addEventListener('click', () => {
+  if (state.selectedIdx < 0) return;
+  const c = state.candidates[state.selectedIdx];
+  loadChatMessages(c.peak_sec, c, state.trimStart, state.trimEnd);
+});
+
+async function loadChatMessages(peak_sec, cand, clipStart = null, clipEnd = null) {
   const container = document.getElementById('chat-options');
   const loading   = document.getElementById('chat-loading');
 
-  // Reset
   container.innerHTML = '';
-  container.appendChild(buildNoneOption());
   loading.style.display = 'block';
   container.appendChild(loading);
 
   state.chatMsgs = [];
-  state.selectedMsg = cand.chat_message || null;
+  const _saved = (cand && cand.chat_messages) || (cand && cand.chat_message ? [cand.chat_message] : []);
+  state.selectedMsgs = _saved.map(m => ({...m}));
 
   try {
-    const resp = await fetch(`/api/messages?peak_sec=${encodeURIComponent(peak_sec)}`);
+    const url = (clipStart !== null && clipEnd !== null)
+      ? `/api/messages?start_sec=${encodeURIComponent(clipStart)}&end_sec=${encodeURIComponent(clipEnd)}`
+      : `/api/messages?peak_sec=${encodeURIComponent(peak_sec)}`;
+    const resp = await fetch(url);
     const msgs = await resp.json();
     state.chatMsgs = msgs;
     loading.style.display = 'none';
@@ -1411,30 +1825,46 @@ async function loadChatMessages(peak_sec, cand) {
     if (msgs.length === 0) {
       loading.textContent = 'No chat messages found in this window.';
       loading.style.display = 'block';
-    } else {
-      msgs.forEach((m, i) => {
-        const opt = document.createElement('div');
-        opt.className = 'chat-option';
-        opt.innerHTML = `
-          <input type="radio" name="chat-msg" value="${i}" id="radio-${i}">
-          <div style="flex:1;min-width:0">
-            <div class="chat-meta"><span class="chat-user">${escHtml(m.user)}</span> · ${fmtTimeSimple(m.offset_sec)}</div>
-            <div class="chat-text">${escHtml(m.text)}</div>
-          </div>
-          ${m.score > 0 ? `<span class="chat-score">${m.score.toFixed(0)}</span>` : ''}
-        `;
-        const radio = opt.querySelector('input[type="radio"]');
-        radio.addEventListener('change', () => {
-          if (radio.checked) state.selectedMsg = m;
-        });
-        // Check if this matches the existing chat_message
-        if (state.selectedMsg && state.selectedMsg.user === m.user &&
-            Math.abs(state.selectedMsg.offset_sec - m.offset_sec) < 0.1) {
-          radio.checked = true;
-        }
-        container.appendChild(opt);
-      });
+      return;
     }
+
+    msgs.forEach((m, i) => {
+      const isSelected = state.selectedMsgs.some(s =>
+        s.user === m.user && Math.abs(s.offset_sec - m.offset_sec) < 0.1);
+
+      const opt = document.createElement('div');
+      opt.className = 'chat-option' + (isSelected ? ' selected' : '');
+      opt.innerHTML = `
+        <input type="checkbox" data-idx="${i}" ${isSelected ? 'checked' : ''} style="accent-color:#6366f1;width:15px;height:15px;flex-shrink:0;cursor:pointer;margin-top:2px">
+        <div style="flex:1;min-width:0">
+          <div class="chat-meta"><span class="chat-user">${escHtml(m.user)}</span> · ${fmtTimeSimple(m.offset_sec)}</div>
+          <div class="chat-text">${escHtml(m.text)}</div>
+        </div>
+        ${m.score > 0 ? `<span class="chat-score">${m.score.toFixed(0)}</span>` : ''}
+      `;
+      const cb = opt.querySelector('input[type="checkbox"]');
+      const toggle = () => {
+        if (cb.checked) {
+          opt.classList.add('selected');
+          if (!state.selectedMsgs.some(s => s.user === m.user && Math.abs(s.offset_sec - m.offset_sec) < 0.1)) {
+            state.selectedMsgs.push(m);
+            state.selectedMsgs.sort((a, b) => a.offset_sec - b.offset_sec);
+          }
+        } else {
+          opt.classList.remove('selected');
+          state.selectedMsgs = state.selectedMsgs.filter(s =>
+            !(s.user === m.user && Math.abs(s.offset_sec - m.offset_sec) < 0.1));
+        }
+        _saveChatMsgToApproved();
+      };
+      cb.addEventListener('change', toggle);
+      opt.addEventListener('click', e => {
+        if (e.target === cb) return;
+        cb.checked = !cb.checked;
+        toggle();
+      });
+      container.appendChild(opt);
+    });
   } catch (e) {
     loading.textContent = 'Failed to load messages.';
     loading.style.display = 'block';
@@ -1442,17 +1872,8 @@ async function loadChatMessages(peak_sec, cand) {
 }
 
 function buildNoneOption() {
-  const opt = document.createElement('div');
-  opt.className = 'chat-option';
-  opt.id = 'chat-none-opt';
-  opt.innerHTML = `<input type="radio" name="chat-msg" value="none" id="radio-none"><label for="radio-none" style="cursor:pointer;flex:1">No overlay</label>`;
-  const radio = opt.querySelector('input');
-  radio.addEventListener('change', () => {
-    if (radio.checked) state.selectedMsg = null;
-  });
-  // Default: if no selectedMsg, check none
-  if (!state.selectedMsg) radio.checked = true;
-  return opt;
+  // No longer used — "no overlay" = nothing checked
+  return document.createDocumentFragment();
 }
 
 function escHtml(s) {
@@ -1478,21 +1899,27 @@ async function approveCurrentClip() {
     game_crop:     state.editGameBox  ? {...state.editGameBox}  : undefined,
     game_crop2:    state.editGameBox2 ? {...state.editGameBox2} : undefined,
     discord_sound: state.discordSound,
+    stinger:       state.stinger,
+    cuts: state.cuts.length > 0 ? state.cuts.map(c => ({...c})) : undefined,
+    trim_min: state.trimMin,
+    trim_max: state.trimMax,
   };
   const cb = state.cropBox && state.cropBox.w > 0.01 ? state.cropBox : {x: 0, y: 0, w: 1, h: 1};
   payload.crop = { ...cb };
-  if (state.selectedMsg) {
-    payload.chat_message = {
-      user:       state.selectedMsg.user,
-      text:       state.selectedMsg.text,
-      offset_sec: state.selectedMsg.offset_sec,
-    };
+  if (state.selectedMsgs.length > 0) {
+    const _pm = state.selectedMsgs.map(m => ({user: m.user, text: m.text, offset_sec: m.offset_sec}));
+    payload.chat_messages = _pm;
+    payload.chat_message  = _pm[0];
+  }
+  if (state.titleEnabled && state.clipTitle.trim()) {
+    payload.title = state.clipTitle.trim();
   }
   if (transcriptWords.length > 0) {
     payload.words = transcriptWords.map(w => ({
       text: w.text, start: w.start, end: w.end,
       ...(w.censored       ? {censored: true}                    : {}),
       ...(w.original_text  ? {original_text: w.original_text}    : {}),
+      ...(w.sfx            ? {sfx: w.sfx}                        : {}),
     }));
   }
 
@@ -1542,52 +1969,48 @@ async function unapproveClip(peak_sec) {
 // ── Approved list ─────────────────────────────────────────────────
 function renderApprovedList() {
   approvedList.innerHTML = '';
+
   state.approved.forEach((a, i) => {
     const div = document.createElement('div');
     div.className = 'approved-card';
-    // Check if this is the currently selected candidate
     if (state.selectedIdx >= 0) {
       const sel = state.candidates[state.selectedIdx];
-      if (sel && Math.abs(sel.peak_sec - a.peak_sec) < 0.01) {
-        div.classList.add('selected');
-      }
+      if (sel && Math.abs(sel.peak_sec - a.peak_sec) < 0.01) div.classList.add('selected');
     }
-    const hasWords = a.words && a.words.length > 0;
+
     div.innerHTML = `
       <span class="approved-num">#${i + 1}</span>
       <span class="approved-time">${fmtTimeSimple(a.start_sec)}–${fmtTimeSimple(a.end_sec)}</span>
       <button class="approved-export-btn" title="Export this clip only" data-peak="${a.peak_sec}">🎬</button>
       <button class="approved-tr-btn" title="Edit transcript" data-peak="${a.peak_sec}">📝</button>
       <button class="approved-remove" title="Remove" data-peak="${a.peak_sec}">×</button>
+      ${a.title ? `<span class="approved-title">${a.title}</span>` : ''}
     `;
+
     div.addEventListener('click', (e) => {
-      if (e.target.classList.contains('approved-remove')) return;
-      if (e.target.classList.contains('approved-tr-btn')) return;
+      if (e.target.classList.contains('approved-remove'))     return;
+      if (e.target.classList.contains('approved-tr-btn'))     return;
       if (e.target.classList.contains('approved-export-btn')) return;
-      
       let idx = state.candidates.findIndex(c => Math.abs(c.peak_sec - a.peak_sec) < 0.01);
-      if (idx < 0 && a.candidate_peak !== undefined) {
+      if (idx < 0 && a.candidate_peak !== undefined)
         idx = state.candidates.findIndex(c => Math.abs(c.peak_sec - a.candidate_peak) < 0.01);
-      }
-      if (idx < 0) {
+      if (idx < 0)
         idx = state.candidates.findIndex(c => a.peak_sec >= c.start_sec && a.peak_sec <= c.end_sec);
-      }
       if (idx < 0) {
         let bestDist = Infinity;
-        state.candidates.forEach((c, i) => {
-          const dist = Math.abs(c.peak_sec - a.peak_sec);
-          if (dist < bestDist) { bestDist = dist; idx = i; }
+        state.candidates.forEach((c, j) => {
+          const d = Math.abs(c.peak_sec - a.peak_sec);
+          if (d < bestDist) { bestDist = d; idx = j; }
         });
       }
       if (idx >= 0) selectCandidate(idx, a);
     });
+
     div.querySelector('.approved-export-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openRenderModal(a.peak_sec);
+      e.stopPropagation(); openRenderModal(a.peak_sec);
     });
     div.querySelector('.approved-tr-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openTranscriptModal(a);
+      e.stopPropagation(); openTranscriptModal(a);
     });
     div.querySelector('.approved-remove').addEventListener('click', () => {
       unapproveClip(a.peak_sec);
@@ -1623,17 +2046,24 @@ document.getElementById('btn-approve-add').addEventListener('click', async () =>
     game_crop:     state.editGameBox  ? {...state.editGameBox}  : undefined,
     game_crop2:    state.editGameBox2 ? {...state.editGameBox2} : undefined,
     discord_sound: state.discordSound,
+    stinger:       state.stinger,
+    cuts: state.cuts.length > 0 ? state.cuts.map(c => ({...c})) : undefined,
+    trim_min: state.trimMin,
+    trim_max: state.trimMax,
   };
   const cb = state.cropBox && state.cropBox.w > 0.01 ? state.cropBox : {x: 0, y: 0, w: 1, h: 1};
   payload.crop = { ...cb };
-  if (state.selectedMsg) payload.chat_message = {
-    user: state.selectedMsg.user, text: state.selectedMsg.text,
-    offset_sec: state.selectedMsg.offset_sec,
-  };
+  if (state.selectedMsgs.length > 0) {
+    const _pm2 = state.selectedMsgs.map(m => ({user: m.user, text: m.text, offset_sec: m.offset_sec}));
+    payload.chat_messages = _pm2;
+    payload.chat_message  = _pm2[0];
+  }
+  if (state.titleEnabled && state.clipTitle.trim()) payload.title = state.clipTitle.trim();
   if (transcriptWords.length > 0) payload.words = transcriptWords.map(w => ({
     text: w.text, start: w.start, end: w.end,
     ...(w.censored      ? {censored: true}                 : {}),
     ...(w.original_text ? {original_text: w.original_text} : {}),
+    ...(w.sfx           ? {sfx: w.sfx}                     : {}),
   }));
 
   await fetch('/api/approve', {
@@ -1647,6 +2077,10 @@ document.getElementById('btn-approve-add').addEventListener('click', async () =>
   renderApprovedList();
   renderCandidateList();
   updateHeaderCount();
+
+  // Future transcript/chat edits should target this newly-approved sub-clip,
+  // not the original candidate's entry.
+  state.editingApprovedPeak = subPeak;
 
   // Reset trim to the full candidate range so the user can pick a new segment
   const dur = player.duration;
@@ -1714,8 +2148,22 @@ document.getElementById('btn-render').addEventListener('click', () => {
 let renderLogOffset = 0;
 let renderSoloPeakSec = null;
 
+// Subtitle font selector
+let _subsFont = 'Komika Axis';
+document.querySelectorAll('.subs-font-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _subsFont = btn.dataset.font;
+    document.querySelectorAll('.subs-font-btn').forEach(b => {
+      const active = b === btn;
+      b.style.background   = active ? '#6366f1' : '#374151';
+      b.style.color        = active ? '#fff'    : '#f9fafb';
+      b.style.borderColor  = active ? '#6366f1' : '#4b5563';
+    });
+  });
+});
+
 // Subtitle position selector
-let _subsYFrac = 0.75;
+let _subsYFrac = 0.73;
 document.querySelectorAll('.subs-pos-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     _subsYFrac = parseFloat(btn.dataset.frac);
@@ -1729,7 +2177,21 @@ document.querySelectorAll('.subs-pos-btn').forEach(btn => {
 });
 
 // Wire up export option toggle behaviour
-['raw','full-frame','gameplay','fill','dual','music'].forEach(id => {
+// Chat overlay position selector
+let _chatYFrac = 0.12;
+document.querySelectorAll('.chat-pos-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _chatYFrac = parseFloat(btn.dataset.frac);
+    document.querySelectorAll('.chat-pos-btn').forEach(b => {
+      const active = b === btn;
+      b.style.background  = active ? '#06b6d4' : '#374151';
+      b.style.color       = active ? '#fff'    : '#f9fafb';
+      b.style.borderColor = active ? '#06b6d4' : '#4b5563';
+    });
+  });
+});
+
+['raw','webcam','full-frame','gameplay','gameplay-zoom','fill','dual','music','chat'].forEach(id => {
   const lbl = document.getElementById('opt-' + id);
   const cb  = document.getElementById('exp-' + id);
   lbl.addEventListener('click', e => {
@@ -1745,7 +2207,7 @@ function _getClipForSolo() {
   return state.approved.find(c => Math.abs(c.peak_sec - renderSoloPeakSec) < 0.01) || null;
 }
 
-function openRenderModal(soloPeakSec = null) {
+async function openRenderModal(soloPeakSec = null) {
   renderSoloPeakSec = soloPeakSec;
   document.getElementById('modal-render').style.display = 'flex';
   document.getElementById('render-inline-progress').style.display = 'none';
@@ -1758,9 +2220,28 @@ function openRenderModal(soloPeakSec = null) {
   const hasGameplay = clip ? !!clip.game_crop : true;
   const hasFill     = clip ? !!(clip.game_crop && clip.cam_crop) : true;
   const hasDual     = clip ? !!(clip.game_crop && clip.game_crop2) : true;
-  document.getElementById('gameplay-warn').style.display = hasGameplay ? 'none' : 'block';
-  document.getElementById('fill-warn').style.display     = hasFill     ? 'none' : 'block';
-  document.getElementById('dual-warn').style.display     = hasDual     ? 'none' : 'block';
+  document.getElementById('gameplay-warn').style.display      = hasGameplay ? 'none' : 'block';
+  document.getElementById('gameplay-zoom-warn').style.display = hasGameplay ? 'none' : 'block';
+  document.getElementById('fill-warn').style.display          = hasFill     ? 'none' : 'block';
+  document.getElementById('dual-warn').style.display          = hasDual     ? 'none' : 'block';
+
+  // Song picker: only show for solo renders; load available songs
+  const songSection = document.getElementById('song-picker-section');
+  if (soloPeakSec !== null) {
+    songSection.style.display = 'block';
+    try {
+      const songs = await fetch('/api/music').then(r => r.json());
+      const sel = document.getElementById('song-select');
+      sel.innerHTML = '<option value="">Random</option>';
+      songs.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s; opt.textContent = s.replace(/\.[^.]+$/, '');
+        sel.appendChild(opt);
+      });
+    } catch (_) {}
+  } else {
+    songSection.style.display = 'none';
+  }
 }
 
 document.getElementById('btn-render-close').addEventListener('click', closeRenderModal);
@@ -1774,8 +2255,10 @@ document.getElementById('btn-render-go').addEventListener('click', async () => {
   const music = document.getElementById('exp-music').checked;
   const selected = [];
   if (document.getElementById('exp-raw').checked)        selected.push('raw');
+  if (document.getElementById('exp-webcam').checked)     selected.push(music ? 'webcam_music' : 'webcam');
   if (document.getElementById('exp-full-frame').checked) selected.push(music ? 'full_frame_music' : 'full_frame');
-  if (document.getElementById('exp-gameplay').checked)   selected.push(music ? 'gameplay_music' : 'gameplay');
+  if (document.getElementById('exp-gameplay').checked)      selected.push(music ? 'gameplay_music' : 'gameplay');
+  if (document.getElementById('exp-gameplay-zoom').checked) selected.push(music ? 'gameplay_zoom_music' : 'gameplay_zoom');
   if (document.getElementById('exp-fill').checked)       selected.push(music ? 'fill_music' : 'fill');
   if (document.getElementById('exp-dual').checked)       selected.push(music ? 'dual_music' : 'dual');
   if (selected.length === 0) { alert('Select at least one export type.'); return; }
@@ -1789,7 +2272,17 @@ document.getElementById('btn-render-go').addEventListener('click', async () => {
   document.getElementById('render-step').textContent = 'Starting…';
   document.getElementById('render-log').innerHTML = '';
 
-  const payload = {only_variants: selected.join(','), subs_y_frac: _subsYFrac};
+  const fontSize  = parseInt(document.getElementById('subs-font-size').value) || 110;
+  const chatOn    = document.getElementById('exp-chat').checked;
+  const songFile  = document.getElementById('song-select').value;
+  const payload   = {
+    only_variants: selected.join(','),
+    subs_y_frac: _subsYFrac,
+    subs_font: _subsFont,
+    subs_font_size: fontSize,
+    ...(chatOn ? {force_chat: true, chat_y_frac: _chatYFrac} : {}),
+    ...(songFile ? {music_file: songFile} : {}),
+  };
   if (renderSoloPeakSec !== null) payload.only_clip = renderSoloPeakSec;
   await fetch('/api/render/start', {
     method: 'POST',
@@ -1898,6 +2391,14 @@ function renderTrFulltext() {
     `${fmtTimeSimple(trModalClip.start_sec)}–${fmtTimeSimple(trModalClip.end_sec)} · ${trModalWords.length} words`;
 }
 
+// Returns the peak_sec that identifies the clip currently loaded in the center panel
+function _centerPeak() {
+  if (state.selectedIdx < 0) return null;
+  return state.editingApprovedPeak !== null
+    ? state.editingApprovedPeak
+    : state.candidates[state.selectedIdx]?.peak_sec ?? null;
+}
+
 async function openTranscriptModal(clip) {
   trModalClip  = clip;
   trModalWords = [];
@@ -1906,12 +2407,21 @@ async function openTranscriptModal(clip) {
     '<span style="color:#6b7280;font-style:italic">Loading…</span>';
   document.getElementById('tr-info').textContent = '';
 
-  // Set up player
   if (trPlayer.src !== `/video/${VOD_ID}`) trPlayer.src = `/video/${VOD_ID}`;
   trPlayer.currentTime = clip.start_sec;
   trPlayer.addEventListener('timeupdate', onTrTimeUpdate);
 
-  // Use saved words if available, otherwise transcribe
+  // If the center-panel word editor already has words for this clip, use them —
+  // they are always the most recent version (may have been re-transcribed or edited).
+  const cp = _centerPeak();
+  const sameClip = cp !== null && Math.abs(clip.peak_sec - cp) < 0.01;
+  if (sameClip && transcriptWords.length > 0) {
+    trModalWords = transcriptWords.map(w => ({...w}));
+    renderTrFulltext();
+    return;
+  }
+
+  // Otherwise fall back to saved words → transcribe
   if (clip.words && clip.words.length > 0) {
     trModalWords = clip.words.map(w => ({...w}));
     renderTrFulltext();
@@ -1929,7 +2439,7 @@ async function openTranscriptModal(clip) {
         return;
       }
       trModalWords = data.words;
-      clip.words = trModalWords; // cache locally
+      clip.words = trModalWords;
       renderTrFulltext();
     } catch (e) {
       document.getElementById('tr-fulltext').innerHTML =
@@ -1961,7 +2471,15 @@ document.getElementById('btn-tr-save').addEventListener('click', async () => {
     body: JSON.stringify(trModalClip),
   });
 
-  // Refresh state
+  // Push saved words back to the center-panel word editor if it's the same clip
+  const cp = _centerPeak();
+  if (cp !== null && Math.abs(trModalClip.peak_sec - cp) < 0.01) {
+    transcriptWords = trModalWords.map(w => ({...w}));
+    renderWordEditor();
+    document.getElementById('transcript-status').textContent =
+      `${transcriptWords.length} words (edited)`;
+  }
+
   const fresh = await fetch('/api/state').then(r => r.json());
   state.approved = fresh.approved;
   renderApprovedList();
@@ -1973,7 +2491,12 @@ document.getElementById('btn-tr-save').addEventListener('click', async () => {
 let transcriptWords = [];   // [{text, start, end}]
 
 function resetTranscript(existingWords) {
+  // Cancel any pending debounced save from the previously-selected clip —
+  // otherwise it can fire after switching and overwrite this clip's words
+  // with the stale transcriptWords from before.
+  clearTimeout(_transcriptSaveTimer);
   transcriptWords = existingWords ? [...existingWords] : [];
+  document.getElementById('btn-load-transcript').disabled = false;
   const statusEl = document.getElementById('transcript-status');
   if (transcriptWords.length > 0) {
     statusEl.textContent = `${transcriptWords.length} words (edited)`;
@@ -2016,6 +2539,7 @@ function renderWordEditor() {
         transcriptWords[i].censored = true;
       }
       renderWordEditor();
+      _scheduleTranscriptSave();
     });
 
     const textSpan = document.createElement('span');
@@ -2025,6 +2549,7 @@ function renderWordEditor() {
     textSpan.spellcheck = false;
     textSpan.addEventListener('input', () => {
       transcriptWords[i].text = textSpan.textContent || '';
+      _scheduleTranscriptSave();
     });
     textSpan.addEventListener('keydown', (e) => {
       if (e.key === 'Backspace' && textSpan.textContent === '') {
@@ -2033,6 +2558,7 @@ function renderWordEditor() {
         renderWordEditor();
         const chips = editor.querySelectorAll('.word-text');
         if (chips[i - 1]) chips[i - 1].focus();
+        _scheduleTranscriptSave();
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const chips = editor.querySelectorAll('.word-text');
@@ -2047,9 +2573,61 @@ function renderWordEditor() {
     delBtn.addEventListener('click', () => {
       transcriptWords.splice(i, 1);
       renderWordEditor();
+      _scheduleTranscriptSave();
     });
 
+    // SFX trigger button
+    const sfxWrap = document.createElement('div');
+    sfxWrap.className = 'sfx-picker-wrap';
+    const sfxBtn = document.createElement('button');
+    sfxBtn.className = 'word-sfx-btn';
+    sfxBtn.textContent = '🔊';
+    sfxBtn.title = w.sfx ? `SFX: ${w.sfx} (click to change/remove)` : 'Add sound effect at this word';
+    sfxBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Close any other open pickers
+      document.querySelectorAll('.sfx-picker-drop').forEach(d => d.remove());
+      const drop = document.createElement('div');
+      drop.className = 'sfx-picker-drop';
+      // Clear option
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'sfx-clear';
+      clearBtn.textContent = '✕ Remove SFX';
+      clearBtn.addEventListener('click', () => {
+        delete transcriptWords[i].sfx;
+        drop.remove();
+        renderWordEditor();
+        _scheduleTranscriptSave();
+      });
+      drop.appendChild(clearBtn);
+      // Load sfx files
+      fetch('/api/sfx/list').then(r => r.json()).then(data => {
+        data.files.forEach(file => {
+          const btn = document.createElement('button');
+          btn.textContent = (transcriptWords[i].sfx === file ? '▶ ' : '') + file.replace(/\.(mp3|wav)$/, '');
+          if (transcriptWords[i].sfx === file) btn.className = 'sfx-active';
+          btn.title = file;
+          btn.addEventListener('click', () => {
+            transcriptWords[i].sfx = file;
+            drop.remove();
+            renderWordEditor();
+            _scheduleTranscriptSave();
+          });
+          drop.appendChild(btn);
+        });
+      });
+      sfxWrap.appendChild(drop);
+      // Close on outside click
+      setTimeout(() => document.addEventListener('click', function _close() {
+        drop.remove();
+        document.removeEventListener('click', _close);
+      }, { once: true }), 0);
+    });
+    sfxWrap.appendChild(sfxBtn);
+
+    if (w.sfx) chip.classList.add('has-sfx');
     chip.appendChild(censorBtn);
+    chip.appendChild(sfxWrap);
     chip.appendChild(textSpan);
     chip.appendChild(delBtn);
     editor.appendChild(chip);
@@ -2060,6 +2638,7 @@ function renderWordEditor() {
 document.getElementById('btn-load-transcript').addEventListener('click', async () => {
   if (state.selectedIdx < 0) return;
   const c = state.candidates[state.selectedIdx];
+  const peakAtStart = c.peak_sec;
   const statusEl = document.getElementById('transcript-status');
   const btn = document.getElementById('btn-load-transcript');
   btn.disabled = true;
@@ -2078,6 +2657,8 @@ document.getElementById('btn-load-transcript').addEventListener('click', async (
       }),
     });
     const data = await resp.json();
+    // Discard if user switched to a different clip while we were waiting
+    if (state.selectedIdx < 0 || state.candidates[state.selectedIdx].peak_sec !== peakAtStart) return;
     if (data.error) {
       statusEl.textContent = `✕ ${data.error}`;
       document.getElementById('word-editor').innerHTML =
@@ -2087,12 +2668,55 @@ document.getElementById('btn-load-transcript').addEventListener('click', async (
     transcriptWords = data.words;
     statusEl.textContent = `${transcriptWords.length} words${data.cached ? ' (cached)' : ''}`;
     renderWordEditor();
+    // Auto-save to the approved clip if one already exists for this candidate
+    await _saveTranscriptToApproved();
   } catch (e) {
-    statusEl.textContent = `✕ ${e.message}`;
+    if (state.selectedIdx >= 0 && state.candidates[state.selectedIdx].peak_sec === peakAtStart) {
+      statusEl.textContent = `✕ ${e.message}`;
+    }
   } finally {
     btn.disabled = false;
   }
 });
+
+async function _saveTranscriptToApproved() {
+  if (state.selectedIdx < 0 || transcriptWords.length === 0) return;
+  const c = state.candidates[state.selectedIdx];
+  const peakToMatch = state.editingApprovedPeak !== null ? state.editingApprovedPeak : c.peak_sec;
+  const approved = state.approved.find(a => Math.abs(a.peak_sec - peakToMatch) < 0.01);
+  if (!approved) return;
+
+  // Sanity check: words from a mismatched/stale transcription run can span
+  // far more time than this clip is long. Refuse to save those — they'd
+  // silently corrupt this clip's transcript with another clip's text.
+  const clipDur = approved.end_sec - approved.start_sec;
+  const wordsEnd = transcriptWords[transcriptWords.length - 1]?.end ?? 0;
+  if (wordsEnd > clipDur + 5) {
+    console.warn('Discarding transcript save: words span', wordsEnd,
+                  's but clip is only', clipDur, 's long');
+    return;
+  }
+
+  approved.words = transcriptWords.map(w => ({
+    text: w.text, start: w.start, end: w.end,
+    ...(w.censored      ? {censored: true}                 : {}),
+    ...(w.original_text ? {original_text: w.original_text} : {}),
+    ...(w.sfx           ? {sfx: w.sfx}                     : {}),
+  }));
+  await fetch('/api/approve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(approved),
+  });
+  const fresh = await fetch('/api/state').then(r => r.json());
+  state.approved = fresh.approved;
+}
+
+let _transcriptSaveTimer = null;
+function _scheduleTranscriptSave() {
+  clearTimeout(_transcriptSaveTimer);
+  _transcriptSaveTimer = setTimeout(_saveTranscriptToApproved, 600);
+}
 
 document.getElementById('btn-add-word').addEventListener('click', () => {
   const last = transcriptWords[transcriptWords.length - 1];
@@ -2104,6 +2728,7 @@ document.getElementById('btn-add-word').addEventListener('click', () => {
   const range = document.createRange();
   const last2 = chips[chips.length - 1];
   if (last2) { range.selectNodeContents(last2); document.getSelection().removeAllRanges(); document.getSelection().addRange(range); }
+  _scheduleTranscriptSave();
 });
 
 document.getElementById('btn-clear-transcript').addEventListener('click', () => {
@@ -2111,6 +2736,7 @@ document.getElementById('btn-clear-transcript').addEventListener('click', () => 
   document.getElementById('transcript-status').textContent = '';
   document.getElementById('word-editor').innerHTML =
     '<span class="word-placeholder">Cleared. Click "Transcribe" to reload.</span>';
+  _scheduleTranscriptSave();
 });
 
 // ── Detection → opens progress modal ─────────────────────────────
@@ -2195,6 +2821,27 @@ document.getElementById('btn-select-vod').addEventListener('click', () => {
   document.getElementById('vod-msg').textContent = '';
   document.getElementById('vod-msg').className = 'modal-msg';
   document.getElementById('modal-vod').style.display = 'flex';
+  // Load available VODs
+  fetch('/api/vods/list').then(r => r.json()).then(files => {
+    const el = document.getElementById('vod-file-items');
+    if (!files.length) { el.innerHTML = '<div style="color:#6b7280;font-size:12px">No VODs found in vods/ folder</div>'; return; }
+    el.innerHTML = '';
+    files.forEach(f => {
+      const btn = document.createElement('button');
+      btn.style.cssText = 'display:flex;justify-content:space-between;align-items:center;background:#1f2937;border:1px solid #374151;border-radius:6px;padding:7px 10px;cursor:pointer;text-align:left;gap:10px;color:#f9fafb;font-size:12px;width:100%';
+      btn.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${f.name}</span><span style="color:#6b7280;flex-shrink:0">${f.size_gb} GB</span>`;
+      btn.addEventListener('mouseover', () => btn.style.background = '#374151');
+      btn.addEventListener('mouseout',  () => btn.style.background = '#1f2937');
+      btn.addEventListener('click', () => {
+        document.querySelector('input[name="vod-type"][value="local"]').checked = true;
+        document.getElementById('vod-input').value = f.path;
+        document.getElementById('btn-vod-confirm').click();
+      });
+      el.appendChild(btn);
+    });
+  }).catch(() => {
+    document.getElementById('vod-file-items').innerHTML = '<div style="color:#ef4444;font-size:12px">Failed to load VODs</div>';
+  });
 });
 document.getElementById('btn-vod-close').addEventListener('click',   () => { document.getElementById('modal-vod').style.display = 'none'; });
 document.getElementById('btn-vod-cancel').addEventListener('click',  () => { document.getElementById('modal-vod').style.display = 'none'; });
@@ -2476,6 +3123,8 @@ function syncEditSlidersToState() {
   if (slidersWrap) slidersWrap.style.display = hideSliders ? 'none' : 'block';
   const discordCb = document.getElementById('edit-discord');
   if (discordCb) discordCb.checked = !!state.discordSound;
+  const stingerCb = document.getElementById('edit-stinger');
+  if (stingerCb) stingerCb.checked = !!state.stinger;
   drawEditCanvas();
   const radio = document.querySelector(`input[name="edit-layout"][value="${state.layoutMode}"]`);
   if (radio) radio.checked = true;
@@ -2702,6 +3351,10 @@ document.getElementById('edit-discord').addEventListener('change', (e) => {
   state.discordSound = e.target.checked;
 });
 
+document.getElementById('edit-stinger').addEventListener('change', (e) => {
+  state.stinger = e.target.checked;
+});
+
 
 document.getElementById('btn-edit-save').addEventListener('click', async () => {
   closeEditModal();
@@ -2714,6 +3367,7 @@ document.getElementById('btn-edit-save').addEventListener('click', async () => {
     if (approved) {
       approved.face_center   = {...state.faceCenter};
       approved.discord_sound = state.discordSound;
+      approved.stinger       = state.stinger;
       approved.cam_crop      = state.editCamBox   ? {...state.editCamBox}   : undefined;
       approved.game_crop     = state.editGameBox  ? {...state.editGameBox}  : undefined;
       approved.game_crop2    = state.editGameBox2 ? {...state.editGameBox2} : undefined;
@@ -2768,10 +3422,14 @@ function atrimLoad(approvedClip) {
   _atrimClip = approvedClip;
   if (!approvedClip) return;
 
-  // Slider range: ±30 s around the original clip, clamped to [0, video duration]
-  const margin = 30;
-  const lo = Math.max(0, approvedClip.start_sec - margin);
-  const hi = Math.min(state.videoDuration || 99999, approvedClip.end_sec + margin);
+  const dur = state.videoDuration || 99999;
+  // Use saved extension window if present, otherwise ±30 s default
+  const lo = typeof approvedClip.trim_min === 'number'
+    ? Math.min(approvedClip.trim_min, approvedClip.start_sec)
+    : Math.max(0, approvedClip.start_sec - 30);
+  const hi = typeof approvedClip.trim_max === 'number'
+    ? Math.max(approvedClip.trim_max, approvedClip.end_sec)
+    : Math.min(dur, approvedClip.end_sec + 30);
 
   atrimStart.min = lo; atrimStart.max = hi; atrimStart.step = 0.1;
   atrimEnd.min   = lo; atrimEnd.max   = hi; atrimEnd.step   = 0.1;

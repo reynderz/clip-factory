@@ -34,15 +34,25 @@ def _loudnorm_args(cfg: dict) -> str:
 def pick_music(folder: Path, seed: int | None = None) -> Path | None:
     if not folder.exists():
         return None
-    files = [p for p in folder.iterdir()
-             if p.suffix.lower() in MUSIC_EXTS]
+    files = sorted(p for p in folder.iterdir()
+                   if p.suffix.lower() in MUSIC_EXTS)
     if not files:
         return None
-    rng = random.Random(seed)
-    return rng.choice(files)
+    if seed is None:
+        return random.choice(files)
+    # seed encodes: high bits = shuffle key (per VOD+variant), low 12 bits = clip position.
+    # This cycles through all songs before repeating, with a different order per VOD.
+    n = len(files)
+    clip_pos   = seed & 0xFFF          # position in the no-repeat cycle (0-4095)
+    shuffle_key = seed >> 12            # which shuffle order to use
+    rng = random.Random(shuffle_key)
+    shuffled = files.copy()
+    rng.shuffle(shuffled)
+    return shuffled[clip_pos % n]
 
 
 def plan_audio(cfg: dict, music_on: bool, music_seed: int | None = None,
+               music_file: Path | None = None,
                project_root: Path | None = None) -> AudioPlan:
     """Build the audio filter chain for a render.
 
@@ -71,10 +81,13 @@ def plan_audio(cfg: dict, music_on: bool, music_seed: int | None = None,
 
     # Voice + music path
     music_cfg = cfg["audio"]["music"]
-    folder = Path(music_cfg["folder"])
-    if project_root is not None and not folder.is_absolute():
-        folder = project_root / folder
-    track = pick_music(folder, seed=music_seed)
+    if music_file is not None and Path(music_file).exists():
+        track = Path(music_file)
+    else:
+        folder = Path(music_cfg["folder"])
+        if project_root is not None and not folder.is_absolute():
+            folder = project_root / folder
+        track = pick_music(folder, seed=music_seed)
     if track is None:
         # No music available; gracefully fall back to voice-only
         return AudioPlan(
@@ -87,9 +100,13 @@ def plan_audio(cfg: dict, music_on: bool, music_seed: int | None = None,
     duck = music_cfg.get("duck_when_speaking", True)
     duck_db = music_cfg.get("duck_amount_db", -8.0)
 
-    # We need the music to loop in case the track is shorter than the clip.
-    # That's handled in extra_inputs with -stream_loop -1.
-    extra = ["-stream_loop", "-1", "-i", str(track)]
+    # Per-file start offset (skip intros); defined in config music.starts dict.
+    starts = music_cfg.get("starts", {})
+    start_sec = float(starts.get(track.name, 0.0))
+    extra = ["-stream_loop", "-1"]
+    if start_sec > 0:
+        extra += ["-ss", f"{start_sec:.3f}"]
+    extra += ["-i", str(track)]
     music_input_label = "[1:a]"   # music is always input #1 for audio purposes
 
     # Music chain: volume + (optional) sidechain compression keyed on voice

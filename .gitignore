@@ -25,6 +25,19 @@ fillers/**/*.mkv
 fillers/**/*.mov
 fillers/**/*.avi
 
+# Stinger / transition videos
+stingers/*.mp4
+stingers/*.mkv
+stingers/*.mov
+stingers/*.avi
+
+# SFX audio
+sfx/*.mp3
+sfx/*.wav
+sfx/*.m4a
+sfx/*.ogg
+sfx/*.flac
+
 # macOS
 .DS_Store
 

@@ -33,13 +33,13 @@ layout:
 # ─── Moment detection ─────────────────────────────────────────────
 detection:
   chat_window_sec: 10
-  chat_min_msgs_per_sec: 1.0
+  chat_min_msgs_per_sec: 0.6
   audio_window_sec: 2
-  audio_peak_percentile: 88
+  audio_peak_percentile: 82
   clip_lead_sec: 8
   clip_trail_sec: 4
-  min_gap_sec: 30
-  max_candidates_per_vod: 40
+  min_gap_sec: 20
+  max_candidates_per_vod: 80
 
 # ─── Scene classifier ─────────────────────────────────────────────
 # LEFT  = scene_a obs_chat_region  (x 0.0 – 0.31)
@@ -85,13 +85,16 @@ audio:
     target_lufs: -14.0     # TikTok / Spotify standard
     target_tp: -1.0        # true-peak ceiling (dBFS)
     target_lra: 11.0       # loudness range
-    boost_db: 3.0          # extra gain applied after loudnorm (raise if still quiet)
+    boost_db: 6.0          # extra gain applied after loudnorm (raise if still quiet)
   # Background music settings (used only by music-on variants).
   music:
     folder: "music"        # relative to project root; drop .mp3/.wav files in
     volume_db: -18.0       # how loud relative to streamer's voice
     duck_when_speaking: true   # auto-duck music when streamer talks (sidechain)
     duck_amount_db: -8.0       # extra reduction during speech
+    # Per-file start offsets (seconds) — skip long intros
+    starts:
+      "Versatile (Super Slowed).mp3": 17.0
 
 # ─── Profanity censor ─────────────────────────────────────────────
 # Detected curse words are muted and replaced with an 880 Hz discord ping.
@@ -99,6 +102,7 @@ audio:
 censor:
   enabled: true
   pad_sec: 0.05           # silence padding around each word (seconds)
+  beep_volume: 0.35       # discord notification volume during censored word (0-1)
   extra_words: []         # add your own: [frick, heck, ...]
   exclude_words: []       # remove false positives: [ass, damn, ...]
 
@@ -107,19 +111,23 @@ censor:
 # subs later, this can move into the variant entry.
 subs:
   font: "Komika Axis"
-  font_size: 90
+  font_size: 110
   primary_color: "&H00FFFFFF"
   highlight_color: "&H0000FFFF"
   outline_color: "&H00000000"
   outline: 5
   shadow: 2
   all_caps: true
-  position_y_frac: 0.75
+  position_y_frac: 0.73
+  title_position_y_frac: 0.15  # fraction from top; 0.15 = below TikTok top UI
   max_words_per_line: 4
+  pop_scale: 100        # scale % at word start for MrBeast bounce (100 = off)
+  pop_duration_ms: 0    # ms to settle back to 100%
+  word_by_word: false   # show only the active word at a time (false = show full line)
 
 # ─── Chat overlay style (used when overlay is "on") ───────────────
 chat_overlay:
-  position_y_frac: 0.50
+  position_y_frac: 0.12
   fade_sec: 0.25
   font_size: 44
   lead_sec: 0.5
@@ -137,10 +145,14 @@ chat_overlay:
 
 variants:
   - {name: raw,              layout: raw,           apply_to: both, chat_overlay: off, music: off}
+  - {name: webcam,           layout: webcam_only,   apply_to: both, chat_overlay: off, music: off}
+  - {name: webcam_music,     layout: webcam_only,   apply_to: both, chat_overlay: off, music: on}
   - {name: full_frame,       layout: full_frame,    apply_to: both, chat_overlay: off, music: off}
   - {name: full_frame_music, layout: full_frame,    apply_to: both, chat_overlay: off, music: on}
   - {name: gameplay,         layout: gameplay_fill, apply_to: both, chat_overlay: off, music: off}
   - {name: gameplay_music,   layout: gameplay_fill, apply_to: both, chat_overlay: off, music: on}
+  - {name: gameplay_zoom,    layout: gameplay_zoom, apply_to: both, chat_overlay: off, music: off}
+  - {name: gameplay_zoom_music, layout: gameplay_zoom, apply_to: both, chat_overlay: off, music: on}
   - {name: fill,             layout: crop_fill,     apply_to: both, chat_overlay: off, music: off}
   - {name: fill_music,       layout: crop_fill,     apply_to: both, chat_overlay: off, music: on}
   - {name: dual,             layout: dual_crop,     apply_to: both, chat_overlay: off, music: off}
@@ -151,10 +163,40 @@ brainrot:
   webcam_top_frac: 0.5
   swap: false
 
+# ─── Zoom punch-in at the peak second ────────────────────────────
+# A Gaussian bump in the crop expression zooms the final frame in briefly
+# at the hype moment and smoothly settles back — no extra render pass.
+zoom_punch:
+  enabled: false
+  zoom_amount: 0.07     # max zoom fraction (0.07 = 7% larger at peak)
+  sigma: 8.0            # controls sharpness of bump; higher = narrower
+
+# ─── Emoji reaction overlay ───────────────────────────────────────
+# Top emojis from chat near the peak are rendered as a large PNG and
+# overlaid on the clip. Falls back to 💀/🔥/😂 when chat has no emojis.
+emoji_overlay:
+  enabled: false
+  window_before_sec: 15.0   # chat window before peak to scan for emojis
+  window_after_sec: 5.0     # chat window after peak
+  max_emojis: 3             # max emojis to show side by side
+  font_size: 120            # rendered emoji size in pixels
+  display_sec: 2.5          # how long the emoji stays on screen
+  appear_before_sec: 0.3    # seconds before peak when emoji pops in
+  fade_sec: 0.25            # fade in/out duration
+  position_x_frac: 0.82     # horizontal center of emoji group (0=left, 1=right)
+  position_y_frac: 0.22     # vertical center (0=top, 1=bottom)
+
+# ─── Stinger (appended to the end of clips that have it toggled on) ──
+# Cut stinger_raw.mp4 to your liking and save as stingers/stinger.mp4.
+# Set enabled: false to skip the stinger even if a clip has stinger: true.
+stinger:
+  path: "stingers/stinger.mp4"
+  enabled: true
+
 # ─── Intro sound effect (plays at t=0 of every rendered clip) ─────
-# Drop the audio file into music/ then set the path below.
+# File lives in sfx/ so it is never picked as background music.
 # Set enabled: false to disable without removing the file.
 intro_sound:
   enabled: true
-  path: "music/intro_sfx.mp3"
+  path: "sfx/intro_sfx.mp3"
   volume_db: 0.0     # raise/lower if the sfx is too quiet or too loud

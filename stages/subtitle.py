@@ -63,22 +63,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     primary_ovr = _ass_color_override(primary)
     highlight_ovr = _ass_color_override(highlight)
 
+    pop_scale = int(s.get("pop_scale", 100))
+    pop_ms = int(s.get("pop_duration_ms", 0))
+    if pop_scale != 100 and pop_ms > 0:
+        pop_tag = f"{{\\fscx{pop_scale}\\fscy{pop_scale}\\t(0,{pop_ms},\\fscx100\\fscy100)}}"
+    else:
+        pop_tag = ""
+
+    word_by_word = s.get("word_by_word", False)
+
     for line in _group_lines(words, s["max_words_per_line"]):
         line_start = line[0].start
         line_end = line[-1].end
-        # For each word, emit one event spanning that word's duration,
-        # showing the whole line with the active word colored.
         for i, active in enumerate(line):
-            parts = []
-            for j, w in enumerate(line):
-                text = w.text.upper() if s["all_caps"] else w.text
-                if j == i:
-                    parts.append(f"{highlight_ovr}{text}")
-                else:
-                    parts.append(f"{primary_ovr}{text}")
-            payload = " ".join(parts)
+            if word_by_word:
+                text = active.text.upper() if s["all_caps"] else active.text
+                payload = pop_tag + highlight_ovr + text
+            else:
+                parts = []
+                for j, w in enumerate(line):
+                    text = w.text.upper() if s["all_caps"] else w.text
+                    if j == i:
+                        parts.append(f"{highlight_ovr}{text}")
+                    else:
+                        parts.append(f"{primary_ovr}{text}")
+                payload = pop_tag + " ".join(parts)
             start = max(line_start, active.start)
-            end = min(line_end, active.end)
+            # Karaoke: hold each word's highlight until the next word begins
+            # so the line never disappears between words.
+            if not word_by_word and i + 1 < len(line):
+                end = min(line_end, line[i + 1].start)
+                end = max(end, active.end)  # never shorter than the word itself
+            else:
+                end = min(line_end, active.end)
             if end <= start:
                 continue
             events.append(
@@ -87,6 +104,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
     return header + "\n".join(events) + "\n"
+
+
+def apply_cuts_to_words(words: list[Word], cuts: list[dict],
+                         duration: float) -> list[Word]:
+    """Remove words inside cut sections and shift remaining timestamps."""
+    segs: list[tuple[float, float]] = []
+    cur = 0.0
+    for c in sorted(cuts, key=lambda x: x["start"]):
+        s, e = float(c["start"]), float(c["end"])
+        if s > cur + 0.01:
+            segs.append((cur, s))
+        cur = max(cur, e)
+    if cur < duration - 0.01:
+        segs.append((cur, duration))
+    if not segs:
+        return []
+
+    result: list[Word] = []
+    offset = 0.0
+    for seg_start, seg_end in segs:
+        for w in words:
+            if w.start >= seg_start and w.end <= seg_end:
+                result.append(Word(
+                    start=w.start - seg_start + offset,
+                    end=w.end - seg_start + offset,
+                    text=w.text,
+                ))
+        offset += seg_end - seg_start
+    return result
 
 
 def write_ass(words: list[Word], cfg: dict,

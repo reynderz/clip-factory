@@ -527,6 +527,17 @@ def build_crop_fill_filter(cfg: dict, cam: dict, game: dict) -> str:
     )
 
 
+def build_gameplay_zoom_filter(cfg: dict, crop: dict) -> str:
+    """Gameplay crop → 9:16 zoomed to fill (no bars). Uses iw/ih expressions."""
+    ow, oh = cfg["output"]["resolution"]
+    x, y, w, h = crop["x"], crop["y"], crop["w"], crop["h"]
+    return (
+        f"[0:v]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},"
+        f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+        f"crop={ow}:{oh}[v]"
+    )
+
+
 def build_gameplay_fill_filter(cfg: dict, crop: dict) -> str:
     """Gameplay crop → 9:16 with gaussian blur fill. Uses iw/ih expressions."""
     ow, oh = cfg["output"]["resolution"]
@@ -624,6 +635,10 @@ def build_filter(cfg: dict, layout: str, scene: str = "scene_a",
         if game_override is None:
             raise ValueError("gameplay_fill requires the gameplay (green) crop box")
         return build_gameplay_fill_filter(cfg, game_override)
+    elif layout == "gameplay_zoom":
+        if game_override is None:
+            raise ValueError("gameplay_zoom requires the gameplay (green) crop box")
+        return build_gameplay_zoom_filter(cfg, game_override)
     elif layout == "dual_crop":
         if game_override is None or game_override2 is None:
             raise ValueError("dual_crop requires both crop boxes")

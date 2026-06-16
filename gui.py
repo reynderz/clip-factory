@@ -22,6 +22,12 @@ from werkzeug.exceptions import NotFound
 ROOT = Path(__file__).parent
 WORK = ROOT / "work"
 
+# Hard cap on how much audio a single /api/transcribe call will feed to
+# whisper. Some detected candidates span tens of minutes (merged moments),
+# which makes transcription effectively hang. Clip to a window around the
+# peak instead.
+MAX_TRANSCRIBE_SEC = 90.0
+
 app = Flask(__name__)
 app.config["VOD_ID"] = None
 
@@ -100,6 +106,20 @@ def _has_transcript() -> bool:
     return (_work() / "vod_transcript.json").exists()
 
 
+def _part_offset() -> float:
+    """VOD time offset for split parts (e.g. part2 starts at 11490 s in the original VOD).
+    Reads from a sidecar .offset file next to the video in vods/."""
+    vod_id = app.config["VOD_ID"]
+    vods_dir = ROOT.parent / "vods"
+    f = vods_dir / f"{vod_id}.offset"
+    if f.exists():
+        try:
+            return float(f.read_text().strip())
+        except Exception:
+            pass
+    return 0.0
+
+
 def _ffmpeg_env() -> dict:
     env = os.environ.copy()
     ffmpeg_bin = "/opt/homebrew/opt/ffmpeg-full/bin"
@@ -164,22 +184,41 @@ def api_state():
 
 @app.route("/api/messages")
 def api_messages():
+    chat_msgs = _load_chat_msgs()
+    offset = _part_offset()  # 0.0 for non-split VODs
+
+    # Clip-window mode: return all messages in [start_sec, end_sec]
+    start_raw = request.args.get("start_sec")
+    end_raw   = request.args.get("end_sec")
+    if start_raw is not None and end_raw is not None:
+        try:
+            start_sec = float(start_raw)
+            end_sec   = float(end_raw)
+        except ValueError:
+            return jsonify({"error": "bad start_sec or end_sec"}), 400
+        # Convert video-relative window to absolute VOD timestamps for filtering
+        vod_start = start_sec + offset
+        vod_end   = end_sec   + offset
+        results = [
+            {"user": m["user"], "text": m["text"],
+             "offset_sec": m["offset_sec"] - offset, "score": 0.0}
+            for m in chat_msgs
+            if vod_start <= m["offset_sec"] <= vod_end
+        ]
+        return jsonify(results)
+
+    # Peak-based mode (original behaviour)
     try:
         peak_sec = float(request.args.get("peak_sec", 0))
     except (TypeError, ValueError):
         return jsonify({"error": "bad peak_sec"}), 400
 
-    vid = app.config["VOD_ID"]
-    work = _work()
-    transcript_path = work / "vod_transcript.json"
-    chat_msgs = _load_chat_msgs()
-
+    peak_vod = peak_sec + offset  # absolute VOD time for chat lookup
+    transcript_path = _work() / "vod_transcript.json"
     results = []
 
     if _has_transcript() and chat_msgs:
         try:
-            # Import here to avoid requiring rapidfuzz at GUI startup when it
-            # might not be installed into the calling Python.
             sys.path.insert(0, str(ROOT))
             from stages.pick_message import rank_messages
             from stages.fetch import ChatMessage
@@ -191,24 +230,23 @@ def api_messages():
                             user=m["user"], text=m["text"])
                 for m in chat_msgs
             ]
-            ranked = rank_messages(peak_sec, transcript_path, fetch_msgs, cfg, top_k=5)
+            ranked = rank_messages(peak_vod, transcript_path, fetch_msgs, cfg, top_k=5)
             results = [
                 {"user": r.user, "text": r.text,
-                 "offset_sec": r.offset_sec, "score": round(r.score, 1)}
+                 "offset_sec": r.offset_sec - offset, "score": round(r.score, 1)}
                 for r in ranked
             ]
         except Exception as e:
             app.logger.warning("rank_messages failed (%s), falling back", e)
 
     if not results:
-        # Time-window fallback: messages ±30 s of peak, no transcript needed
         window_sec = 30.0
         for m in chat_msgs:
-            if abs(m["offset_sec"] - peak_sec) <= window_sec:
+            if abs(m["offset_sec"] - peak_vod) <= window_sec:
                 results.append({
                     "user": m["user"],
                     "text": m["text"],
-                    "offset_sec": m["offset_sec"],
+                    "offset_sec": m["offset_sec"] - offset,
                     "score": 0.0,
                 })
         results = results[:5]
@@ -242,6 +280,35 @@ def api_crops_apply_all():
         clip.update(crops)
     _save_approved(approved)
     return jsonify({"ok": True, "updated": len(approved)})
+
+
+@app.route("/api/candidates/add", methods=["POST"])
+def api_candidates_add():
+    body = request.get_json(force=True) or {}
+    try:
+        start_sec = float(body["start_sec"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "missing or invalid start_sec"}), 400
+
+    duration = 60.0
+    end_sec  = start_sec + duration
+    peak_sec = start_sec + duration / 2
+
+    candidate = {
+        "start_sec": round(start_sec, 3),
+        "end_sec":   round(end_sec,   3),
+        "peak_sec":  round(peak_sec,  3),
+        "score":     1.0,
+        "reasons":   ["manual"],
+    }
+
+    p = _candidates_path()
+    candidates = json.loads(p.read_text()) if p.exists() else []
+    candidates.append(candidate)
+    candidates.sort(key=lambda c: c["start_sec"])
+    p.write_text(json.dumps(candidates, indent=2))
+
+    return jsonify({"ok": True, "candidate": candidate})
 
 
 @app.route("/api/unapprove", methods=["POST"])
@@ -280,6 +347,24 @@ def api_render_start():
         subs_y_frac = body.get("subs_y_frac")
         if subs_y_frac is not None:
             cmd += ["--subs-y-frac", str(subs_y_frac)]
+
+        subs_font = body.get("subs_font", "").strip()
+        if subs_font:
+            cmd += ["--subs-font", subs_font]
+
+        subs_font_size = body.get("subs_font_size")
+        if subs_font_size is not None:
+            cmd += ["--subs-font-size", str(int(subs_font_size))]
+
+        if body.get("force_chat"):
+            cmd += ["--force-chat"]
+            chat_y = body.get("chat_y_frac")
+            if chat_y is not None:
+                cmd += ["--chat-y-frac", str(chat_y)]
+
+        music_file = body.get("music_file", "").strip()
+        if music_file:
+            cmd += ["--music-file", music_file]
 
         _render_state = "running"
         _render_exit_code = None
@@ -368,8 +453,18 @@ def api_transcribe():
     end_sec   = float(body.get("end_sec",   start_sec + 30))
     peak_sec  = float(body.get("peak_sec",  start_sec))
 
-    cache_key = f"{vod_id}_{peak_sec}"
+    # Detected candidates can span tens of minutes after merging adjacent
+    # moments. Clamp to a window around the peak so transcription doesn't
+    # effectively hang on a huge clip.
+    if end_sec - start_sec > MAX_TRANSCRIBE_SEC:
+        half = MAX_TRANSCRIBE_SEC / 2
+        start_sec = max(start_sec, peak_sec - half)
+        end_sec = min(end_sec, peak_sec + half)
+
+    print(f"[transcribe] peak={peak_sec:.2f} start={start_sec:.2f} end={end_sec:.2f}", flush=True)
+    cache_key = f"{vod_id}_{start_sec:.3f}_{end_sec:.3f}"
     if cache_key in _transcript_cache:
+        print(f"[transcribe] cache HIT for peak={peak_sec:.2f}", flush=True)
         return jsonify({"words": _transcript_cache[cache_key], "cached": True})
 
     vod_path = (_work() / f"{vod_id}.mp4").resolve()
@@ -404,6 +499,14 @@ def api_transcribe():
         tmp.unlink(missing_ok=True)
 
 
+@app.route("/api/sfx/list")
+def api_sfx_list():
+    sfx_dir = ROOT / "sfx"
+    files = sorted(p.name for p in sfx_dir.glob("*.mp3")) + \
+            sorted(p.name for p in sfx_dir.glob("*.wav"))
+    return jsonify({"files": files})
+
+
 @app.route("/api/log")
 def api_log():
     kind = request.args.get("type", "detect")
@@ -416,6 +519,24 @@ def api_log():
     return jsonify({"lines": lines[after:], "total": len(lines)})
 
 
+@app.route("/api/music")
+def api_music():
+    """List available music files."""
+    from stages.cfg import load_global
+    try:
+        cfg = load_global()
+        folder = Path(cfg["audio"]["music"]["folder"])
+        if not folder.is_absolute():
+            folder = ROOT / folder
+    except Exception:
+        folder = ROOT / "music"
+    exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+    if not folder.exists():
+        return jsonify([])
+    files = sorted(p.name for p in folder.iterdir() if p.suffix.lower() in exts)
+    return jsonify(files)
+
+
 @app.route("/api/variants")
 def api_variants():
     try:
@@ -426,6 +547,22 @@ def api_variants():
         return jsonify(variants)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vods/list")
+def api_vods_list():
+    vods_dir = ROOT.parent / "vods"
+    if not vods_dir.is_dir():
+        return jsonify([])
+    files = sorted(
+        vods_dir.glob("*.mp4"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return jsonify([
+        {"name": p.name, "path": str(p), "size_gb": round(p.stat().st_size / 1e9, 2)}
+        for p in files
+    ])
 
 
 @app.route("/api/vod/set", methods=["POST"])
