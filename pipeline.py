@@ -16,18 +16,23 @@ Usage:
 
     python pipeline.py auto <vod_id> --top 10
         Skip review, render top-N candidates through all variants.
+
+    python pipeline.py import_clips <vod_id> --dir /path/to/premade_clips
+        Import a folder of already-cut clips as candidates instead of a VOD.
+        Skips download + moment detection; each file becomes one candidate.
 """
 from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 from stages import (fetch, detect_moments, detect_chat_reading,
                     transcribe_vod, classify_scene, transcribe, subtitle,
-                    render, chat_overlay, censor)
+                    render, chat_overlay, censor, import_folder)
 from stages.subtitle import apply_cuts_to_words
 from stages.cfg import load_global, load_variants, variant_applies
 from review import review as review_cli
@@ -154,7 +159,8 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
                         force_chat: bool = False,
                         msgs: list | None = None,
                         subs_cli: dict | None = None,
-                        music_file: str | None = None) -> Path | None:
+                        music_file: str | None = None,
+                        music_run_key: int = 0) -> Path | None:
     """Render a single variant for a single approved clip."""
     name = variant["name"]
     layout = variant["layout"]
@@ -205,7 +211,11 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
         [clip["chat_message"]] if clip.get("chat_message") else []
     )
     if chat_on and msgs_to_show:
-        lead = cfg.get("chat_overlay", {}).get("lead_sec", 0.5)
+        # Selected chat message(s) always open the clip — not synced to their
+        # real chat timestamp or the clip's peak. The 1st message shows at
+        # t=0; later ones stack back-to-back after it, unless the GUI set an
+        # explicit display_start_sec on that message.
+        stack_gap = cfg.get("chat_overlay", {}).get("stack_gap_sec", 0.3)
         if len(msgs_to_show) == 1:
             msg = msgs_to_show[0]
             overlay_png = work / f"clip_{idx:03d}__{name}_chat.png"
@@ -216,9 +226,10 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
                 font_name=cfg["subs"]["font"],
                 font_size=cfg.get("chat_overlay", {}).get("font_size", 44),
             )
-            overlay_start = max(0.0, (clip["peak_sec"] - start) - lead)
+            overlay_start = 0.0
         else:
             chat_overlays_list = []
+            prev_start = 0.0
             for mi, msg in enumerate(msgs_to_show):
                 png = work / f"clip_{idx:03d}__{name}_chat_{mi}.png"
                 chat_overlay.render_chat_overlay(
@@ -228,8 +239,13 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
                     font_name=cfg["subs"]["font"],
                     font_size=cfg.get("chat_overlay", {}).get("font_size", 44),
                 )
-                t = max(0.0, msg["offset_sec"] - start - lead)
+                if mi == 0:
+                    t = 0.0
+                else:
+                    override = msg.get("display_start_sec")
+                    t = float(override) if override is not None else prev_start + overlay_dur + stack_gap
                 chat_overlays_list.append((png, t, overlay_dur))
+                prev_start = t
 
     # Filler (brainrot only)
     filler_path = None
@@ -249,14 +265,11 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
         filler_start = pick.start_sec
         filler_loop = pick.needs_loop
 
-    # Music seed: shuffle key encodes VOD + variant (high bits) so the
-    # song order differs per VOD. Low 12 bits = clip position so clips
-    # cycle through all songs before repeating.
+    # Music seed: high bits = random per-render-run key so the song order
+    # is different every time. Low 12 bits = clip position so clips cycle
+    # through all songs before repeating within one render session.
     if music_on:
-        vod_id_str  = work.name
-        shuffle_key = (sum(ord(c) * (i + 1) for i, c in enumerate(vod_id_str))
-                       + sum(ord(c) for c in name)) & 0xFFFFF
-        music_seed  = (shuffle_key << 12) | ((idx - 1) & 0xFFF)
+        music_seed = (music_run_key << 12) | ((idx - 1) & 0xFFF)
     else:
         music_seed = None
     # Explicit song override from the render modal (solo render only)
@@ -277,6 +290,20 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
     # The Word dataclass drops custom fields; the raw dicts from clip["words"] keep them.
     _words_for_censor = clip.get("words") or words
     curse_hits = censor.find_curse_words(_words_for_censor, cfg)
+
+    # Curse-word timestamps are in the ORIGINAL (pre-cut) clip timeline, but by
+    # the time the mute filter runs, jump cuts have already trimmed/concatenated
+    # the audio onto a shorter, shifted timeline. Without remapping, a hit whose
+    # end lands past the new (shorter) duration mutes everything up to the
+    # actual end of the clip instead of just the word — remap it the same way
+    # subtitle words are (see words_for_ass below).
+    clip_cuts = clip.get("cuts") or []
+    duration_sec = end - start
+    if clip_cuts and curse_hits:
+        _hit_words = [transcribe.Word(text="", start=h["start"], end=h["end"])
+                      for h in curse_hits]
+        _hit_words = apply_cuts_to_words(_hit_words, clip_cuts, duration_sec)
+        curse_hits = [{"start": w.start, "end": w.end} for w in _hit_words]
 
     # SFX triggers: words tagged with an sfx file in the GUI
     _sfx_triggers = [
@@ -317,13 +344,26 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
 
     # Subtitle words adjusted for any jump cuts
     words_for_ass = words
-    clip_cuts = clip.get("cuts") or []
     if clip_cuts:
-        duration_sec = end - start
         words_for_ass = apply_cuts_to_words(list(words), clip_cuts, duration_sec)
+    if clip.get("subs_disabled"):
+        words_for_ass = []
 
+    # The render filter now uses a trim+setpts stage that normalises PTS to 0
+    # at the exact clip start, so no seek-offset correction is needed.
+    # Only apply an explicit per-clip delay if the user configured one.
+    _extra_delay = float(clip_cfg.get("subs", {}).get("subtitle_delay_sec", 0.0))
+    _sub_delay = round(_extra_delay, 3)
     subtitle.write_ass(words_for_ass, clip_cfg,
-                       tuple(clip_cfg["output"]["resolution"]), ass_path)
+                       tuple(clip_cfg["output"]["resolution"]), ass_path,
+                       delay_sec=_sub_delay)
+
+    # Subtitle emoji theme: random emoji popping above the caption line,
+    # roughly every N spoken words (independent of the peak reaction emoji above).
+    from stages import subs_emoji_theme as _subs_emoji_mod
+    subs_emoji_overlays = _subs_emoji_mod.build_emoji_theme_overlays(
+        words_for_ass, clip_cfg, work, idx, name, delay_sec=_sub_delay,
+    )
 
     out_path = out_dir / f"clip_{idx:03d}__{name}.mp4"
     _stinger_path = _resolve_stinger(cfg, ROOT) if clip.get("stinger") else None
@@ -352,6 +392,7 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
         emoji_png=emoji_png,
         emoji_start=emoji_start_t,
         emoji_duration=emoji_dur,
+        subs_emoji_overlays=subs_emoji_overlays or None,
         cuts=clip_cuts or None,
         sfx_triggers=_sfx_triggers,
         title_png=title_png,
@@ -381,9 +422,16 @@ def cmd_render(args):
         subs_cli["font"] = args.subs_font
     if getattr(args, "subs_font_size", None) is not None:
         subs_cli["font_size"] = args.subs_font_size
+    if getattr(args, "subs_style", None):
+        cfg["subs"]["style"] = args.subs_style     # clips without subs
+        subs_cli["style"] = args.subs_style        # clips with subs (post-merge)
+    if getattr(args, "emoji_theme", False):
+        cfg.setdefault("subs_emoji_theme", {})["enabled"] = True
 
     force_chat = getattr(args, "force_chat", False)
-    if force_chat and getattr(args, "chat_y_frac", None) is not None:
+    # Applies whenever ANY clip shows chat — not just when force_chat is on,
+    # since a clip with a per-clip selected message shows chat regardless.
+    if getattr(args, "chat_y_frac", None) is not None:
         cfg["chat_overlay"]["position_y_frac"] = args.chat_y_frac
 
     _DUAL_LAYOUTS = {"dual_screen", "screen_cam_split", "screen_filler"}
@@ -412,6 +460,10 @@ def cmd_render(args):
 
     print(f"Rendering {len(approved)} approved clips through "
           f"{len(all_variants)} variants (max).")
+
+    # Random per-run key — ensures song selection differs each render session
+    # while still cycling through all songs without repeats within the session.
+    music_run_key = random.randint(0, (1 << 20) - 1)
 
     total_rendered = 0
     for i, c in enumerate(approved, 1):
@@ -448,22 +500,49 @@ def cmd_render(args):
         if not applicable:
             continue
 
-        # Use GUI-edited words if present, otherwise transcribe.
+        # Word priority:
+        #  1. GUI-edited / GUI-transcribed words saved in approved.json  (most trusted)
+        #  2. Full-VOD coarse transcript (fast, no re-encode, good accuracy)
+        #  3. Fresh per-clip whisper transcription (slowest, last resort)
         if c.get("words"):
             words = [transcribe.Word(text=w["text"],
                                      start=float(w["start"]),
                                      end=float(w["end"]))
                      for w in c["words"]]
-            print(f"  using {len(words)} edited words from GUI")
+            print(f"  using {len(words)} GUI words")
         else:
-            clip_audio = work / f"clip_{i:03d}.wav"
-            subprocess.run([
-                "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(vod),
-                "-t", f"{end - start:.3f}", "-vn", "-ac", "1", "-ar", "16000",
-                str(clip_audio),
-            ], check=True, capture_output=True)
-            words = transcribe.transcribe(clip_audio)
-            print(f"  transcribed {len(words)} words")
+            vod_transcript_path = work / "vod_transcript.json"
+            vod_words: list[transcribe.Word] = []
+            if vod_transcript_path.exists():
+                raw = json.loads(vod_transcript_path.read_text())
+                for w in raw:
+                    ws, we = float(w["start"]), float(w["end"])
+                    if ws >= start and we <= end + 0.5:
+                        vod_words.append(transcribe.Word(
+                            text=w["text"],
+                            start=round(ws - start, 3),
+                            end=round(we - start, 3),
+                        ))
+            if vod_words:
+                words = vod_words
+                print(f"  using {len(words)} words from vod_transcript")
+            else:
+                clip_audio = work / f"clip_{i:03d}.wav"
+                _pts_off = render.vod_pts_offset(vod)
+                _seek_pos = start + _pts_off
+                _margin   = 10.0
+                _pre      = max(0.0, _seek_pos - _margin)
+                _fine     = _seek_pos - _pre
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-fflags", "+genpts",
+                    "-ss", f"{_pre:.3f}", "-i", str(vod),
+                    "-ss", f"{_fine:.3f}",
+                    "-t", f"{end - start:.3f}", "-vn", "-ac", "1", "-ar", "16000",
+                    str(clip_audio),
+                ], check=True, capture_output=True, timeout=render._FFMPEG_TIMEOUT)
+                words = transcribe.transcribe(clip_audio)
+                print(f"  transcribed {len(words)} words (fresh whisper)")
 
         for v in applicable:
             try:
@@ -471,7 +550,8 @@ def cmd_render(args):
                     vod, c, scene, words, work, cfg, v, out_root, i,
                     force_chat=force_chat, msgs=msgs,
                     subs_cli=subs_cli,
-                    music_file=getattr(args, "music_file", None))
+                    music_file=getattr(args, "music_file", None),
+                    music_run_key=music_run_key)
                 if out:
                     total_rendered += 1
                     print(f"    → {out.name}")
@@ -494,17 +574,23 @@ def cmd_detect_only(args):
     vod = fetch.download_vod(vod_id, work)
     msgs = fetch.download_chat(vod_id, work)
     duration = get_duration(vod)
-    print(f"  VOD: {vod.name}  {duration:.0f}s, chat msgs: {len(msgs)}")
+    max_sec = args.max_sec if args.max_sec and args.max_sec < duration else duration
+    if max_sec < duration:
+        print(f"  VOD: {vod.name}  {duration:.0f}s → limiting to first {max_sec:.0f}s, chat msgs: {len(msgs)}")
+        msgs = [m for m in msgs if m.offset_sec <= max_sec]
+    else:
+        print(f"  VOD: {vod.name}  {duration:.0f}s, chat msgs: {len(msgs)}")
 
     print("[2/3] Detecting hype moments…")
-    cands = detect_moments.detect(vod, msgs, duration, cfg)
+    cands = detect_moments.detect(vod, msgs, max_sec, cfg)
+    cands = [c for c in cands if c.start_sec < max_sec]
     print(f"  {len(cands)} hype candidates")
 
     if cfg.get("chat_reading", {}).get("enabled", True):
-        print("[3/3] Transcribing VOD for chat-reading detection (~15-25 min first run)…")
+        print(f"[3/3] Transcribing first {max_sec:.0f}s for chat-reading detection (~15-25 min first run)…")
         tpath = work / "vod_transcript.json"
-        transcribe_vod.transcribe_full_vod(vod, tpath)
-        chat_events = detect_chat_reading.detect_chat_reads(tpath, msgs, duration, cfg)
+        transcribe_vod.transcribe_full_vod(vod, tpath, max_sec=max_sec)
+        chat_events = detect_chat_reading.detect_chat_reads(tpath, msgs, max_sec, cfg)
         detect_chat_reading.save_events(chat_events, work / "chat_reads.json")
         print(f"  {len(chat_events)} chat-reading moments")
         from stages.detect_moments import Candidate
@@ -512,12 +598,13 @@ def cmd_detect_only(args):
         trail = cfg["detection"]["clip_trail_sec"]
         extra = [Candidate(
             start_sec=max(0.0, e.peak_sec - lead),
-            end_sec=min(duration, e.peak_sec + trail),
+            end_sec=min(max_sec, e.peak_sec + trail),
             peak_sec=e.peak_sec,
             score=1.5 + (e.score - 55) / 100,
             reasons=[f"chat_read={e.score:.0f}"],
         ) for e in chat_events]
         cands = detect_moments._merge(cands + extra, cfg["detection"]["min_gap_sec"])
+        cands = [c for c in cands if c.start_sec < max_sec]
         cands.sort(key=lambda c: -c.score)
         cands = cands[:cfg["detection"]["max_candidates_per_vod"]]
     else:
@@ -525,6 +612,26 @@ def cmd_detect_only(args):
 
     (work / "candidates.json").write_text(
         json.dumps([dataclasses.asdict(c) for c in cands], indent=2))
+    print(f"Done. {len(cands)} candidates saved to {work / 'candidates.json'}")
+    print(f"Open the GUI: python gui.py {vod_id}")
+
+
+# ─────────────────────────── import_clips ───────────────────────
+def cmd_import_clips(args):
+    """Import a folder of premade/pre-cut clips as candidates, skipping
+    VOD download and hype-moment detection entirely."""
+    vod_id = args.vod_id
+    work = WORK / vod_id; work.mkdir(parents=True, exist_ok=True)
+    folder = Path(args.dir).expanduser().resolve()
+    if not folder.is_dir():
+        raise SystemExit(f"Not a folder: {folder}")
+
+    print(f"[1/2] Scanning {folder} for clip files…")
+    out_vod = work / f"{vod_id}.mp4"
+    print("[2/2] Normalising + concatenating clips into a single project VOD…")
+    cands = import_folder.import_folder(folder, out_vod)
+
+    (work / "candidates.json").write_text(json.dumps(cands, indent=2))
     print(f"Done. {len(cands)} candidates saved to {work / 'candidates.json'}")
     print(f"Open the GUI: python gui.py {vod_id}")
 
@@ -586,6 +693,12 @@ def main():
                     help="Override subtitle font name")
     p2.add_argument("--subs-font-size", type=int, default=None,
                     help="Override subtitle font size")
+    p2.add_argument("--subs-style", type=str, default=None,
+                    choices=["karaoke", "word_pop"],
+                    help="karaoke = full line, active word highlighted (default); "
+                         "word_pop = one word at a time, MrBeast-style bounce")
+    p2.add_argument("--emoji-theme", action="store_true", default=False,
+                    help="Pop random emoji above the subtitles as words are spoken")
     p2.add_argument("--force-chat", action="store_true", default=False,
                     help="Force chat overlay on for all variants (only clips with a message selected)")
     p2.add_argument("--chat-y-frac", type=float, default=None,
@@ -603,10 +716,18 @@ def main():
     p4.set_defaults(func=cmd_variants)
 
     p5 = sub.add_parser("detect_only"); p5.add_argument("vod_id")
+    p5.add_argument("--max-sec", type=float, default=None,
+                    help="Only detect candidates up to this many seconds into the VOD")
     p5.set_defaults(func=cmd_detect_only)
 
     p6 = sub.add_parser("gui"); p6.add_argument("vod_id")
     p6.set_defaults(func=cmd_gui)
+
+    p7 = sub.add_parser("import_clips")
+    p7.add_argument("vod_id", help="Project name to create/overwrite")
+    p7.add_argument("--dir", required=True,
+                    help="Folder of premade clip video files to import")
+    p7.set_defaults(func=cmd_import_clips)
 
     args = ap.parse_args()
     args.func(args)

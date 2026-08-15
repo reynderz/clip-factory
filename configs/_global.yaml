@@ -36,6 +36,16 @@ detection:
   chat_min_msgs_per_sec: 0.6
   audio_window_sec: 2
   audio_peak_percentile: 82
+  # Mic-band RMS (voice-frequency band-pass) — proxy for isolated mic peak
+  # since Twitch VODs only ship one mixed stereo track.
+  mic_window_sec: 2
+  mic_band_low_hz: 300
+  mic_band_high_hz: 3400
+  mic_peak_percentile: 85    # raised-voice threshold
+  mic_weight: 0.8
+  # Screaming = same band, much higher percentile → stronger hype signal.
+  scream_percentile: 96
+  scream_weight: 1.5
   clip_lead_sec: 8
   clip_trail_sec: 4
   min_gap_sec: 20
@@ -115,22 +125,47 @@ subs:
   primary_color: "&H00FFFFFF"
   highlight_color: "&H0000FFFF"
   outline_color: "&H00000000"
-  outline: 5
+  outline: 8
   shadow: 2
   all_caps: true
   position_y_frac: 0.73
   title_position_y_frac: 0.15  # fraction from top; 0.15 = below TikTok top UI
   max_words_per_line: 4
+  # style: "karaoke" = full line shown, active word highlighted (default)
+  #        "word_pop" = one word on screen at a time, big MrBeast-style bounce
+  #                      — plain white text (no highlight colour), bigger
+  #                      font, and each word is capped at max_word_display_sec
+  #                      so pacing stays fast even during slow speech.
+  style: karaoke
   pop_scale: 100        # scale % at word start for MrBeast bounce (100 = off)
   pop_duration_ms: 0    # ms to settle back to 100%
-  word_by_word: false   # show only the active word at a time (false = show full line)
+  # 100/0 above are left as "off" defaults for karaoke. When style=word_pop
+  # and these are still at 100/0, subtitle.py substitutes MrBeast-tuned
+  # defaults (170% / 90ms — a bigger, snappier pop) — see WORD_POP_* in subtitle.py.
+  word_by_word: false   # legacy alias for style=word_pop; kept for old configs
+  word_pop_font_scale: 1.2      # word_pop resting font size = font_size * this
+  max_word_display_sec: 0.45    # word_pop only: hard cap per word, however long it's spoken
+  # word_pop only: if the silence between two words is >= gap_pop_sec, pop a
+  # filler (e.g. "...") on screen so the caption doesn't just go blank during
+  # pauses. 0 disables gap-popping.
+  gap_pop_sec: 0.35
+  gap_pop_text: "..."
+  gap_pop_max_sec: 0.8   # cap how long the filler stays up, even if the gap is longer
+  # Extra subtitle delay in seconds on top of the auto seek-offset correction.
+  # Positive = subtitles appear later; negative = earlier (Whisper timestamps
+  # words ~150 ms late, so -0.15 is a good baseline).
+  subtitle_delay_sec: -0.15
 
 # ─── Chat overlay style (used when overlay is "on") ───────────────
+# Selected chat message(s) always open the clip at t=0 (not synced to their
+# real chat timestamp or the clip's peak). With 2+ messages, each later one
+# stacks back-to-back after the previous unless it has its own
+# display_start_sec (settable per-message in the render modal).
 chat_overlay:
   position_y_frac: 0.12
   fade_sec: 0.25
   font_size: 44
-  lead_sec: 0.5
+  stack_gap_sec: 0.3   # gap between messages when auto-stacking (no override)
   visible_sec: 4.5
 
 # ─── EXPORT MODES ─────────────────────────────────────────────────
@@ -149,8 +184,10 @@ variants:
   - {name: webcam_music,     layout: webcam_only,   apply_to: both, chat_overlay: off, music: on}
   - {name: full_frame,       layout: full_frame,    apply_to: both, chat_overlay: off, music: off}
   - {name: full_frame_music, layout: full_frame,    apply_to: both, chat_overlay: off, music: on}
-  - {name: gameplay,         layout: gameplay_fill, apply_to: both, chat_overlay: off, music: off}
-  - {name: gameplay_music,   layout: gameplay_fill, apply_to: both, chat_overlay: off, music: on}
+  - {name: gameplay_black,         layout: gameplay_black,    apply_to: both, chat_overlay: off, music: off}
+  - {name: gameplay_black_music,   layout: gameplay_black,    apply_to: both, chat_overlay: off, music: on}
+  - {name: gameplay_original,      layout: gameplay_original, apply_to: both, chat_overlay: off, music: off}
+  - {name: gameplay_original_music, layout: gameplay_original, apply_to: both, chat_overlay: off, music: on}
   - {name: gameplay_zoom,    layout: gameplay_zoom, apply_to: both, chat_overlay: off, music: off}
   - {name: gameplay_zoom_music, layout: gameplay_zoom, apply_to: both, chat_overlay: off, music: on}
   - {name: fill,             layout: crop_fill,     apply_to: both, chat_overlay: off, music: off}
@@ -186,6 +223,38 @@ emoji_overlay:
   position_x_frac: 0.82     # horizontal center of emoji group (0=left, 1=right)
   position_y_frac: 0.22     # vertical center (0=top, 1=bottom)
 
+# ─── Subtitle emoji theme (MrBeast-style random emoji popping above captions) ──
+# Independent of subs.style — works with karaoke or word_pop. Words that
+# obviously match an emoji (fire, dead, crazy, look, ...) always get that one
+# — see _WORD_EMOJI in subs_emoji_theme.py. Gaps between those are filled at
+# roughly every Nth spoken word with a random pick from `pool`, so the pop
+# cadence stays lively even in clips with no keyword hits. Apple Color Emoji,
+# rendered via Pillow so colour glyphs are guaranteed regardless of libass.
+subs_emoji_theme:
+  enabled: false
+  pool: ["🔥", "💀", "😳", "🤯", "😂", "👀", "💯", "😱", "🚨", "⚡"]
+  every_n_words: 4       # roughly one filler emoji every N spoken words (jittered ±1)
+  size: 140               # rendered emoji size in pixels
+  display_sec: 0.6       # how long each emoji stays visible
+  pop_amount: 0.45       # bounce amplitude (0.45 = pops up to 145% size)
+  pop_sigma: 40.0        # bounce sharpness (higher = snappier pop)
+  fade_sec: 0.08         # alpha fade in/out at each edge
+  # word_pop style: emoji sits beside the (centered) word rather than
+  # floating above it. gap_px is the horizontal breathing room between the
+  # word's right edge and the emoji; y_nudge_frac nudges it up slightly to
+  # line up with the word's visual centre (ASS anchors text at its bottom).
+  gap_px: 24
+  y_nudge_frac: 0.035
+  # karaoke style (or if word width can't be measured): fall back to
+  # floating above the caption line, centered with a little random jitter.
+  fallback_gap_above_subs_frac: 0.12
+  fallback_x_jitter_frac: 0.10
+
+# ─── TikTok overlay PNG offset ───────────────────────────────────────
+# Negative y moves the overlay (and any watermark baked into it) upward.
+overlay:
+  y_offset: -60    # pixels; -60 ≈ 3% up on a 1920 px tall frame
+
 # ─── Stinger (appended to the end of clips that have it toggled on) ──
 # Cut stinger_raw.mp4 to your liking and save as stingers/stinger.mp4.
 # Set enabled: false to skip the stinger even if a clip has stinger: true.
@@ -197,6 +266,6 @@ stinger:
 # File lives in sfx/ so it is never picked as background music.
 # Set enabled: false to disable without removing the file.
 intro_sound:
-  enabled: true
+  enabled: false
   path: "sfx/intro_sfx.mp3"
   volume_db: 0.0     # raise/lower if the sfx is too quiet or too loud

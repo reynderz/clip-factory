@@ -9,6 +9,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .emoji_font import load_apple_emoji_font
+
 _EMOJI_RE = re.compile(
     u'[\U0001F300-\U0001FAFF'
     u'\U00002600-\U000027BF'
@@ -17,8 +19,6 @@ _EMOJI_RE = re.compile(
     u'\U00002B50-\U00002BFF'
     u']+'
 )
-
-_EMOJI_FONT_PATH = Path("/System/Library/Fonts/Apple Color Emoji.ttc")
 
 
 def _split_segments(text: str) -> list[tuple[str, bool]]:
@@ -48,19 +48,23 @@ def render_title_png(title: str, cfg: dict, out_path: Path) -> Path:
         main_font = ImageFont.load_default(size=font_size)
 
     try:
-        emoji_font = ImageFont.truetype(str(_EMOJI_FONT_PATH), font_size, index=0)
+        emoji_font, emoji_strike = load_apple_emoji_font(font_size)
+        emoji_scale = font_size / emoji_strike
     except OSError:
-        emoji_font = main_font
+        emoji_font, emoji_scale = main_font, 1.0
 
     segments = _split_segments(text)
 
-    # Measure total rendered width on a scratch canvas
+    # Measure total rendered width on a scratch canvas. Emoji are measured at
+    # their native strike size then scaled to the effective on-canvas width.
     scratch = Image.new("RGBA", (1, 1))
     d = ImageDraw.Draw(scratch)
-    total_w = sum(
-        int(d.textlength(seg, font=(emoji_font if is_emoji else main_font)))
-        for seg, is_emoji in segments
-    )
+
+    def _seg_width(seg: str, is_emoji: bool) -> int:
+        w = d.textlength(seg, font=(emoji_font if is_emoji else main_font))
+        return int(w * emoji_scale) if is_emoji else int(w)
+
+    total_w = sum(_seg_width(seg, is_emoji) for seg, is_emoji in segments)
 
     ascent, descent = main_font.getmetrics()
     pad = outline + 10
@@ -72,14 +76,29 @@ def render_title_png(title: str, cfg: dict, out_path: Path) -> Path:
 
     x, y = pad, pad
     for seg, is_emoji in segments:
-        font = emoji_font if is_emoji else main_font
-        draw.text(
-            (x, y), seg, font=font,
-            fill=(255, 255, 255, 255),
-            stroke_width=0 if is_emoji else outline,
-            stroke_fill=(0, 0, 0, 255),
-        )
-        x += int(d.textlength(seg, font=font))
+        if is_emoji:
+            # Render at the font's native (valid) strike size on its own tile,
+            # then resize the bitmap to the requested font_size before pasting
+            # — Apple Color Emoji only has fixed embedded sizes.
+            bbox = d.textbbox((0, 0), seg, font=emoji_font)
+            tile_w = max(1, bbox[2] - bbox[0])
+            tile_h = max(1, bbox[3] - bbox[1])
+            tile = Image.new("RGBA", (tile_w, tile_h), (0, 0, 0, 0))
+            ImageDraw.Draw(tile).text((-bbox[0], -bbox[1]), seg, font=emoji_font,
+                                       embedded_color=True)
+            if emoji_scale != 1.0:
+                tile = tile.resize((max(1, round(tile_w * emoji_scale)),
+                                     max(1, round(tile_h * emoji_scale))),
+                                    Image.LANCZOS)
+            img.paste(tile, (x, y), tile)
+        else:
+            draw.text(
+                (x, y), seg, font=main_font,
+                fill=(255, 255, 255, 255),
+                stroke_width=outline,
+                stroke_fill=(0, 0, 0, 255),
+            )
+        x += _seg_width(seg, is_emoji)
 
     img.save(out_path)
     return out_path

@@ -10,12 +10,14 @@ Both video and audio go through filter_complex so we can sidechain
 compression for music ducking without extra render passes.
 """
 from __future__ import annotations
+import functools
 import subprocess
 import tempfile
 from pathlib import Path
 
 from . import crop as crop_mod
 from . import audio as audio_mod
+from . import subtitle as subtitle_mod
 
 # ── Stinger: layouts where gameplay continues behind the stinger ───
 # webcam on TOP, gameplay on BOTTOM — stinger goes in webcam slot
@@ -29,6 +31,87 @@ _STINGER_WATCHPARTY = {"watch_party"}
 
 _STINGER_SPLIT = (_STINGER_WEBCAM_TOP | _STINGER_WEBCAM_BOT |
                    _STINGER_AS_FILLER | _STINGER_WATCHPARTY)
+
+# Twitch VODs occasionally carry non-monotonic DTS around ad-break
+# discontinuities; feeding that straight into a filter_complex graph (esp.
+# with sidechaincompress/amix) can deadlock ffmpeg at 0% CPU instead of
+# erroring out. `_run_ffmpeg` bounds every render so a stall fails the clip
+# instead of hanging the pipeline (and the GUI's render state) forever.
+_FFMPEG_TIMEOUT = 300  # seconds
+
+
+def _run_ffmpeg(cmd: list[str], timeout: float = _FFMPEG_TIMEOUT) -> None:
+    try:
+        subprocess.run(cmd, check=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"ffmpeg stalled for {timeout:.0f}s and was killed "
+            f"(likely non-monotonic DTS in the source VOD): {' '.join(cmd[:8])}..."
+        ) from e
+
+
+@functools.lru_cache(maxsize=8)
+def vod_pts_offset(vod: Path) -> float:
+    """Return the container start_time (seconds).
+
+    yt-dlp preserves the original HLS broadcast PTS when downloading Twitch
+    VODs, so the file's first frame has PTS = start_time, not 0.  The browser
+    player normalises this to 0, meaning browser time T maps to file PTS
+    T + start_time.  Every ffmpeg -ss seek must add this offset.
+    """
+    try:
+        r = subprocess.run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=start_time",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(vod),
+        ], capture_output=True, text=True, timeout=10)
+        v = r.stdout.strip()
+        if v and v != "N/A":
+            return max(0.0, float(v))
+    except Exception:
+        pass
+    return 0.0
+
+
+def subtitle_seek_offset(vod: Path, start: float) -> float:
+    """Return seconds to add to ASS timestamps to correct for keyframe-seek offset.
+
+    With fast input seek (-ss before -i), ffmpeg's output PTS is normalised to 0
+    at the first decoded packet (the I-frame / keyframe), NOT at the requested
+    start position.  The ASS filter therefore maps ASS t=0 to the keyframe, making
+    subtitles appear early by (start - keyframe_DTS) seconds.  This function
+    measures that offset so callers can shift all subtitle timestamps forward.
+
+    start is in browser time (0-based); the ffprobe read uses the file-PTS
+    position (start + vod_pts_offset) so we probe the correct keyframe.
+    """
+    seek_pts = start + vod_pts_offset(vod)
+    try:
+        result = subprocess.run([
+            "ffprobe", "-v", "quiet",
+            "-select_streams", "v:0",
+            "-show_entries", "packet=dts_time,flags",
+            "-read_intervals", f"{max(0, seek_pts - 10.0):.3f}%{seek_pts:.3f}",
+            "-of", "csv=p=0",
+            str(vod),
+        ], capture_output=True, text=True, timeout=15)
+        last_kf_dts = None
+        for line in result.stdout.splitlines():
+            parts = line.strip().split(",")
+            if len(parts) < 2:
+                continue
+            try:
+                dts = float(parts[0])
+                if "K" in parts[1]:
+                    last_kf_dts = dts
+            except (ValueError, IndexError):
+                pass
+        if last_kf_dts is not None:
+            return round(max(0.0, seek_pts - last_kf_dts), 3)
+    except Exception:
+        pass
+    return 0.0
 
 
 def _video_enc_args(cfg: dict) -> list[str]:
@@ -88,8 +171,10 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
         return f"{sw}:{sh}:0:0"
 
     if layout in _STINGER_SPLIT and vod is not None:
-        inputs = ["-ss", f"{vod_end:.3f}", "-i", str(vod),  # slot 0
-                  "-i", str(stinger_path)]                   # slot 1
+        _pts_off = vod_pts_offset(vod)
+        inputs = ["-fflags", "+genpts",
+                  "-ss", f"{vod_end + _pts_off:.3f}", "-i", str(vod),  # slot 0
+                  "-i", str(stinger_path)]                               # slot 1
         ol_slot = None
         if overlay_path:
             inputs += ["-loop", "1", "-i", str(overlay_path)]
@@ -173,7 +258,7 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
         else:
             map_v = "[v]"
 
-        subprocess.run([
+        _run_ffmpeg([
             "ffmpeg", "-y",
             *inputs,
             "-t", f"{stinger_dur:.3f}",
@@ -185,7 +270,7 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
             "-c:a", "aac", "-b:a", "192k", "-ac", "1",
             "-movflags", "+faststart",
             str(out_path),
-        ], check=True)
+        ])
 
     else:
         # The stinger fills the same visual slot as the main clip content.
@@ -198,35 +283,54 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
         #
         # gameplay_zoom / everything else: game fills the full frame, so stinger
         #   also fills full frame using full_frame blur-fill.
-        if layout == "gameplay_fill" and game_override is not None:
+        if layout in ("gameplay_fill", "gameplay_black", "gameplay_original") and game_override is not None:
             src_w, src_h = cfg["layout"]["source_resolution"]
             crop_w_px = game_override["w"] * src_w
             crop_h_px = game_override["h"] * src_h
-            # How tall does the game content render in the output?
             content_scale = min(ow / crop_w_px, oh / crop_h_px)
             h_slot = min(oh, int(crop_h_px * content_scale) & ~1)
-            # Stinger: blur bg from full stinger, fg stinger zooms to fill slot
-            layout_filt = (
-                f"[0:v]split=2[stng_bg][stng_fg];"
-                f"[stng_bg]scale={ow}:{oh}:force_original_aspect_ratio=increase,"
-                f"crop={ow}:{oh},boxblur=40:2[bgb];"
-                f"[stng_fg]scale={ow}:{h_slot}:force_original_aspect_ratio=increase,"
-                f"crop={ow}:{h_slot}[fg_slot];"
-                f"[bgb][fg_slot]overlay=(W-w)/2:(H-h)/2[v]"
-            )
+            if layout == "gameplay_black":
+                _fps = cfg["output"]["fps"]
+                layout_filt = (
+                    f"[0:v]scale={ow}:{h_slot}:force_original_aspect_ratio=increase,"
+                    f"crop={ow}:{h_slot}[stng_fg];"
+                    f"color=c=black:s={ow}x{oh}:r={_fps}[stng_bg];"
+                    f"[stng_bg][stng_fg]overlay=(W-w)/2:(H-h)/2[v]"
+                )
+            elif layout == "gameplay_original":
+                # Original full frame blurred to fill background, stinger centered
+                layout_filt = (
+                    f"[0:v]split=2[stng_bg][stng_fg];"
+                    f"[stng_bg]scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+                    f"crop={ow}:{oh},boxblur=40:2[go_bg];"
+                    f"[stng_fg]scale={ow}:{h_slot}:force_original_aspect_ratio=increase,"
+                    f"crop={ow}:{h_slot}[go_fg];"
+                    f"[go_bg][go_fg]overlay=(W-w)/2:(H-h)/2[v]"
+                )
+            else:
+                # gameplay_fill: blur bars around stinger in the same slot
+                layout_filt = (
+                    f"[0:v]split=2[stng_bg][stng_fg];"
+                    f"[stng_bg]scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+                    f"crop={ow}:{oh},boxblur=40:2[bgb];"
+                    f"[stng_fg]scale={ow}:{h_slot}:force_original_aspect_ratio=increase,"
+                    f"crop={ow}:{h_slot}[fg_slot];"
+                    f"[bgb][fg_slot]overlay=(W-w)/2:(H-h)/2[v]"
+                )
         else:
             layout_filt = crop_mod.build_full_frame_filter(cfg)
 
         inputs = ["-i", str(stinger_path)]
         if overlay_path:
             inputs += ["-loop", "1", "-i", str(overlay_path)]
-            filt = layout_filt + f";[v][1:v]overlay=0:0:format=auto,setsar=1[vout]"
+            _ov_y = int(cfg.get("overlay", {}).get("y_offset", 0))
+            filt = layout_filt + f";[v][1:v]overlay=0:{_ov_y}:format=auto,setsar=1[vout]"
             map_v = "[vout]"
         else:
             filt = layout_filt
             map_v = "[v]"
 
-        subprocess.run([
+        _run_ffmpeg([
             "ffmpeg", "-y",
             *inputs,
             "-t", f"{stinger_dur:.3f}",
@@ -238,12 +342,12 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
             "-c:a", "aac", "-b:a", "192k", "-ac", "1",
             "-movflags", "+faststart",
             str(out_path),
-        ], check=True)
+        ])
 
 
 def _concat_clips(clip_a: Path, clip_b: Path, out_path: Path, cfg: dict) -> None:
     """Concatenate two encoded clips into one using the concat filter."""
-    subprocess.run([
+    _run_ffmpeg([
         "ffmpeg", "-y",
         "-i", str(clip_a), "-i", str(clip_b),
         "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]",
@@ -252,19 +356,21 @@ def _concat_clips(clip_a: Path, clip_b: Path, out_path: Path, cfg: dict) -> None
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(out_path),
-    ], check=True)
+    ])
 
 
 def render_raw_clip(vod: Path, start: float, end: float, out_path: Path) -> Path:
     """Stream-copy cut from the source VOD — no crop, no encode, no overlays."""
-    subprocess.run([
+    pts_off = vod_pts_offset(vod)
+    _run_ffmpeg([
         "ffmpeg", "-y",
-        "-ss", f"{start:.3f}",
+        "-fflags", "+genpts",
+        "-ss", f"{start + pts_off:.3f}",
         "-i", str(vod),
         "-t", f"{end - start:.3f}",
         "-c", "copy",
         str(out_path),
-    ], check=True)
+    ])
     return out_path
 
 
@@ -354,6 +460,7 @@ def render_clip(vod: Path, start: float, end: float,
                 emoji_png: Path | None = None,
                 emoji_start: float = 0.0,
                 emoji_duration: float = 2.5,
+                subs_emoji_overlays: list[tuple] | None = None,
                 cuts: list[dict] | None = None,
                 sfx_triggers: list[dict] | None = None,
                 title_png: Path | None = None,
@@ -362,9 +469,20 @@ def render_clip(vod: Path, start: float, end: float,
     fps = cfg["output"]["fps"]
     crf = cfg["output"]["crf"]
     duration = end - start
+    _pts_off = vod_pts_offset(vod)
+
+    # Two-step seek: fast seek to 10 s before the clip, then trim accurately
+    # in the filter so the output PTS starts at exactly 0 = clip start.
+    # This removes the need for a subtitle seek-offset correction.
+    _seek_target = start + _pts_off
+    _pre_sec     = min(10.0, _seek_target)   # how far we fast-seek before clip start
+    _coarse_seek = _seek_target - _pre_sec
 
     # ── Assemble ffmpeg inputs and track which slot is which ──
-    inputs: list[str] = ["-ss", f"{start:.3f}", "-i", str(vod)]
+    # +genpts regenerates presentation timestamps from decode order, which
+    # papers over the non-monotonic DTS Twitch VODs sometimes have around ad
+    # breaks — without it ffmpeg's filter graph can stall indefinitely there.
+    inputs: list[str] = ["-fflags", "+genpts", "-ss", f"{_coarse_seek:.3f}", "-i", str(vod)]
     next_slot = 1   # [0:v] = VOD, next = 1
 
     filler_slot = None
@@ -411,6 +529,12 @@ def render_clip(vod: Path, start: float, end: float,
     if emoji_png is not None:
         inputs += ["-loop", "1", "-i", str(emoji_png)]
         emoji_slot = next_slot
+        next_slot += 1
+
+    subs_emoji_slots: list[tuple[int, float, float, float]] = []  # (slot, start, dur, x_jitter)
+    for _png, _t0, _tdur, _xj in (subs_emoji_overlays or []):
+        inputs += ["-loop", "1", "-i", str(_png)]
+        subs_emoji_slots.append((next_slot, _t0, _tdur, _xj))
         next_slot += 1
 
     title_slot = None
@@ -467,10 +591,32 @@ def render_clip(vod: Path, start: float, end: float,
             overlay_slot = next_slot
             next_slot += 1
 
+    # ── Accurate-seek trim: normalise PTS so that t=0 in the filter = clip start.
+    # We fast-seeked _pre_sec before the clip; trim that pre-roll away and reset
+    # PTS so downstream filters (especially the ass subtitle filter) see t=0 at
+    # the exact first frame of the clip.  This replaces [0:v]/[0:a] with
+    # [v_src]/[a_src] throughout the rest of the filter chain.
+    #
+    # apad guarantees a_src is never shorter than the video: the source VOD's
+    # audio track sometimes runs a hair short of the video for a given span
+    # (Twitch VOD stitching / dropped audio frames near ad-break seams), and
+    # without padding that leaves the tail of the clip silent once muxed
+    # against the full-length video track.
+    _clip_dur = end - start   # original full duration before any jump-cuts
+    _src_trim = (
+        f"[0:v]trim=start={_pre_sec:.3f}:end={_pre_sec + _clip_dur:.3f},"
+        f"setpts=PTS-STARTPTS[v_src]"
+        f";[0:a]atrim=start={_pre_sec:.3f}:end={_pre_sec + _clip_dur:.3f},"
+        f"asetpts=PTS-STARTPTS,apad=whole_dur={_clip_dur:.3f}[a_src]"
+    )
+
     # ── Jump cuts: split/trim/concat before layout ──
     cut_stages: list[str] = []
     if cuts:
         cut_stages, duration = _build_cuts_filter(duration, cuts)
+        # _build_cuts_filter uses [0:v]/[0:a]; rewrite to our normalised labels
+        cut_stages = [s.replace("[0:v]", "[v_src]").replace("[0:a]", "[a_src]")
+                      for s in cut_stages]
 
     # ── Build the video filter chain ──
     layout_filter = crop_mod.build_filter(cfg, layout, scene,
@@ -482,12 +628,15 @@ def render_clip(vod: Path, start: float, end: float,
     if cuts and cut_stages:
         layout_filter = layout_filter.replace("[0:v]", "[v_cut]")
         audio_plan.filter_chain = audio_plan.filter_chain.replace("[0:a]", "[a_cut]")
+    else:
+        layout_filter = layout_filter.replace("[0:v]", "[v_src]")
+        audio_plan.filter_chain = audio_plan.filter_chain.replace("[0:a]", "[a_src]")
 
     # The brainrot filter uses [1:v]. If filler_slot != 1, rewrite.
     if filler_slot is not None and filler_slot != 1:
         layout_filter = layout_filter.replace("[1:v]", f"[{filler_slot}:v]")
 
-    stages = cut_stages + [layout_filter]
+    stages = [_src_trim] + cut_stages + [layout_filter]
     current = "[v]"
 
     # ── Zoom punch-in at peak second ──
@@ -552,12 +701,51 @@ def render_clip(vod: Path, start: float, end: float,
             )
             current = lbl_out
 
+    # ── Subtitle emoji theme: random emoji pops beside the spoken word ──
+    if subs_emoji_slots:
+        ec = cfg.get("subs_emoji_theme", {})
+        subs_cfg = cfg.get("subs", {})
+        subs_y_frac = float(subs_cfg.get("position_y_frac", 0.73))
+        if subtitle_mod.get_style(subs_cfg) == "word_pop":
+            # Inline beside the word: nudge up slightly since ASS anchors
+            # text at its bottom edge, not its vertical centre.
+            y_nudge = float(ec.get("y_nudge_frac", 0.035))
+            y_frac = max(0.02, subs_y_frac - y_nudge)
+        else:
+            # Karaoke's active word position within the line isn't known
+            # here, so fall back to floating above the caption.
+            gap_above = float(ec.get("fallback_gap_above_subs_frac", 0.12))
+            y_frac = max(0.02, subs_y_frac - gap_above)
+        pop_amount = float(ec.get("pop_amount", 0.45))
+        pop_sigma = float(ec.get("pop_sigma", 40.0))
+        fade = float(ec.get("fade_sec", 0.08))
+        for si, (sslot, t0, tdur, xj) in enumerate(subs_emoji_slots):
+            t0 = max(0.0, t0)   # ffmpeg's fade filter rejects a negative st
+            t1 = t0 + tdur
+            t_safe = "if(isnan(t),0,t)"
+            pop_expr = f"(1+{pop_amount:.3f}*exp(-{pop_sigma:.1f}*({t_safe}-{t0:.3f})^2))"
+            lbl_in = f"[spe{si}]"
+            lbl_out = f"[spo{si}]"
+            stages.append(
+                f"[{sslot}:v]format=rgba,"
+                f"scale=w='trunc(iw*{pop_expr}/2)*2':h='trunc(ih*{pop_expr}/2)*2':"
+                f"eval=frame:flags=lanczos,"
+                f"fade=t=in:st={t0:.3f}:d={fade}:alpha=1,"
+                f"fade=t=out:st={max(t0, t1 - fade):.3f}:d={fade}:alpha=1{lbl_in}"
+            )
+            stages.append(
+                f"{current}{lbl_in}overlay=x=(W-w)/2+W*{xj:.3f}:y=H*{y_frac:.3f}-h/2:"
+                f"enable='between(t,{t0:.3f},{t1:.3f})':format=auto{lbl_out}"
+            )
+            current = lbl_out
+
     # ffmpeg 8.x requires explicit filename= for the ass filter
     esc = str(ass_path).replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
     if overlay_slot is not None:
+        _ov_y = int(cfg.get("overlay", {}).get("y_offset", 0))
         stages.append(f"{current}ass=filename={esc},setsar=1[vpre_overlay]")
         stages.append(
-            f"[vpre_overlay][{overlay_slot}:v]overlay=0:0:format=auto,setsar=1[vout]"
+            f"[vpre_overlay][{overlay_slot}:v]overlay=0:{_ov_y}:format=auto,setsar=1[vout]"
         )
     else:
         stages.append(f"{current}ass=filename={esc},setsar=1[vout]")
@@ -649,7 +837,7 @@ def render_clip(vod: Path, start: float, end: float,
         "-movflags", "+faststart",
         str(render_target),
     ]
-    subprocess.run(cmd, check=True)
+    _run_ffmpeg(cmd)
 
     if tmp_main is not None and tmp_stinger is not None:
         try:

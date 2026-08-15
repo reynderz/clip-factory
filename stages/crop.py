@@ -552,6 +552,39 @@ def build_gameplay_fill_filter(cfg: dict, crop: dict) -> str:
     )
 
 
+def build_gameplay_black_filter(cfg: dict, crop: dict) -> str:
+    """Gameplay crop → 9:16 with solid black fill. Uses iw/ih expressions."""
+    ow, oh = cfg["output"]["resolution"]
+    fps = cfg["output"]["fps"]
+    x, y, w, h = crop["x"], crop["y"], crop["w"], crop["h"]
+    return (
+        f"[0:v]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},"
+        f"scale={ow}:-2:force_original_aspect_ratio=decrease"
+        f":force_divisible_by=2[gbl_fg];"
+        f"color=c=black:s={ow}x{oh}:r={fps}[gbl_bg];"
+        f"[gbl_bg][gbl_fg]overlay=(W-w)/2:(H-h)/2[v]"
+    )
+
+
+def build_gameplay_original_filter(cfg: dict, crop: dict) -> str:
+    """Gameplay crop → 9:16, the crop itself gaussian-blurred to fill background.
+
+    Background: the selected gameplay region, scaled up and blurred to fill 9:16
+    (not the full 16:9 source frame).
+    Foreground: the same selected gameplay region scaled to fit, centered on top.
+    """
+    ow, oh = cfg["output"]["resolution"]
+    x, y, w, h = crop["x"], crop["y"], crop["w"], crop["h"]
+    return (
+        f"[0:v]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},split=2[go_bg][go_fg];"
+        f"[go_bg]scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+        f"crop={ow}:{oh},boxblur=40:2[go_bgf];"
+        f"[go_fg]scale={ow}:-2:force_original_aspect_ratio=decrease"
+        f":force_divisible_by=2[go_fgs];"
+        f"[go_bgf][go_fgs]overlay=(W-w)/2:(H-h)/2[v]"
+    )
+
+
 def build_dual_crop_filter(cfg: dict, top: dict, bot: dict) -> str:
     """Two user-drawn crops stacked 50/50, each with gaussian blur fill.
 
@@ -635,6 +668,14 @@ def build_filter(cfg: dict, layout: str, scene: str = "scene_a",
         if game_override is None:
             raise ValueError("gameplay_fill requires the gameplay (green) crop box")
         return build_gameplay_fill_filter(cfg, game_override)
+    elif layout == "gameplay_black":
+        if game_override is None:
+            raise ValueError("gameplay_black requires the gameplay (green) crop box")
+        return build_gameplay_black_filter(cfg, game_override)
+    elif layout == "gameplay_original":
+        if game_override is None:
+            raise ValueError("gameplay_original requires the gameplay (green) crop box")
+        return build_gameplay_original_filter(cfg, game_override)
     elif layout == "gameplay_zoom":
         if game_override is None:
             raise ValueError("gameplay_zoom requires the gameplay (green) crop box")

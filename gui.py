@@ -44,6 +44,12 @@ _detect_exit_code: int | None = None
 _detect_lock = threading.Lock()
 _detect_log: deque = deque(maxlen=200)
 
+_import_proc: subprocess.Popen | None = None
+_import_state = "idle"
+_import_exit_code: int | None = None
+_import_lock = threading.Lock()
+_import_log: deque = deque(maxlen=200)
+
 
 # ── helpers ───────────────────────────────────────────────────────
 def _work() -> Path:
@@ -144,6 +150,16 @@ def _stream_proc(proc: subprocess.Popen, log_buf: deque,
 
 
 # ── routes ────────────────────────────────────────────────────────
+@app.after_request
+def _no_cache(response):
+    """Prevent the browser from caching pages or API responses."""
+    if not request.path.startswith("/video/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 @app.route("/")
 def index():
     sys.path.insert(0, str(ROOT))
@@ -153,7 +169,16 @@ def index():
         scenes = cfg.get("layout", {}).get("scenes", {})
     except Exception:
         scenes = {}
-    return render_template("gui.html", vod_id=app.config["VOD_ID"], scenes=scenes)
+    with _detect_lock:
+        detect_state = _detect_state
+        detect_log_lines = list(_detect_log)
+    return render_template(
+        "gui.html",
+        vod_id=app.config["VOD_ID"],
+        scenes=scenes,
+        detect_state=detect_state,
+        detect_log_lines=detect_log_lines,
+    )
 
 
 @app.route("/video/<vod_id>")
@@ -170,6 +195,20 @@ def serve_font():
     if not font_path.exists():
         raise NotFound("Font not found")
     return send_file(str(font_path), mimetype="font/truetype")
+
+
+@app.route("/api/ping")
+def api_ping():
+    """Diagnostic: called by browser img probes so we can see JS execution progress."""
+    step = request.args.get("step", "?")
+    err  = request.args.get("e", "")
+    if err:
+        app.logger.warning("BROWSER JS ERROR at %s: %s", step, err)
+    else:
+        app.logger.info("BROWSER PING step=%s", step)
+    resp = app.make_response(b'')
+    resp.content_type = "image/gif"
+    return resp
 
 
 @app.route("/api/state")
@@ -356,11 +395,22 @@ def api_render_start():
         if subs_font_size is not None:
             cmd += ["--subs-font-size", str(int(subs_font_size))]
 
+        subs_style = body.get("subs_style", "").strip()
+        if subs_style:
+            cmd += ["--subs-style", subs_style]
+
+        if body.get("emoji_theme"):
+            cmd += ["--emoji-theme"]
+
         if body.get("force_chat"):
             cmd += ["--force-chat"]
-            chat_y = body.get("chat_y_frac")
-            if chat_y is not None:
-                cmd += ["--chat-y-frac", str(chat_y)]
+
+        # Position applies to any clip that shows chat (via force_chat OR a
+        # per-clip selected message), so it must NOT be gated on force_chat —
+        # otherwise picking "Middle" does nothing unless force_chat is also on.
+        chat_y = body.get("chat_y_frac")
+        if chat_y is not None:
+            cmd += ["--chat-y-frac", str(chat_y)]
 
         music_file = body.get("music_file", "").strip()
         if music_file:
@@ -407,8 +457,11 @@ def api_detect_start():
         if _detect_state == "running":
             return jsonify({"ok": False, "error": "already running"})
 
+        body = request.get_json(force=True) or {}
         cmd = [sys.executable, "-u", str(ROOT / "pipeline.py"), "detect_only",
                app.config["VOD_ID"]]
+        if body.get("max_sec"):
+            cmd += ["--max-sec", str(float(body["max_sec"]))]
         _detect_state = "running"
         _detect_exit_code = None
         _detect_log.clear()
@@ -442,6 +495,87 @@ def api_detect_status():
     return jsonify(resp)
 
 
+@app.route("/api/import/start", methods=["POST"])
+def api_import_start():
+    """Import a folder of premade clips as a new project — replaces the
+    VOD-download + moment-detection steps entirely."""
+    global _import_proc, _import_state, _import_exit_code
+
+    with _import_lock:
+        if _import_state == "running":
+            return jsonify({"ok": False, "error": "already running"})
+
+        body = request.get_json(force=True) or {}
+        vod_id = body.get("vod_id", "").strip()
+        clip_dir = body.get("dir", "").strip()
+        if not vod_id:
+            return jsonify({"ok": False, "error": "missing vod_id"}), 400
+        if not clip_dir:
+            return jsonify({"ok": False, "error": "missing dir"}), 400
+
+        folder = Path(clip_dir).expanduser()
+        if not folder.is_dir():
+            return jsonify({"ok": False, "error": f"not a folder: {folder}"}), 400
+
+        (WORK / vod_id).mkdir(parents=True, exist_ok=True)
+        app.config["VOD_ID"] = vod_id
+
+        cmd = [sys.executable, "-u", str(ROOT / "pipeline.py"), "import_clips",
+               vod_id, "--dir", str(folder)]
+        _import_state = "running"
+        _import_exit_code = None
+        _import_log.clear()
+        _import_proc = subprocess.Popen(
+            cmd, cwd=str(ROOT), env=_ffmpeg_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+
+    def _watch_import():
+        global _import_state, _import_exit_code
+        for raw in _import_proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if line:
+                with _import_lock:
+                    _import_log.append(line)
+        _import_proc.wait()
+        with _import_lock:
+            _import_exit_code = _import_proc.returncode
+            _import_state = "done" if _import_proc.returncode == 0 else "error"
+
+    threading.Thread(target=_watch_import, daemon=True).start()
+    return jsonify({"ok": True, "vod_id": vod_id})
+
+
+@app.route("/api/import/status")
+def api_import_status():
+    with _import_lock:
+        resp = {"state": _import_state}
+        if _import_exit_code is not None:
+            resp["exit_code"] = _import_exit_code
+    return jsonify(resp)
+
+
+@app.route("/api/clip_folders/list")
+def api_clip_folders_list():
+    """List subfolders under vods/ that might contain premade clips."""
+    vods_dir = ROOT.parent / "vods"
+    if not vods_dir.is_dir():
+        return jsonify([])
+    folders = sorted(
+        (p for p in vods_dir.iterdir() if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    result = []
+    for p in folders:
+        count = sum(1 for f in p.iterdir()
+                    if f.is_file() and f.suffix.lower() in
+                    {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".avi", ".flv"})
+        if count:
+            result.append({"name": p.name, "path": str(p), "clip_count": count})
+    return jsonify(result)
+
+
 _transcript_cache: dict = {}   # f"{vod_id}_{peak_sec}" -> list[dict]
 
 
@@ -471,12 +605,32 @@ def api_transcribe():
     if not vod_path.exists():
         return jsonify({"error": "VOD file not found"}), 404
 
+    # Twitch VODs downloaded with yt-dlp keep the original HLS broadcast PTS,
+    # so the container start_time is non-zero. The browser player normalises
+    # this away (its t=0 == file PTS start_time), so every ffmpeg seek must
+    # add the PTS offset to land at the right place.
+    sys.path.insert(0, str(ROOT))
+    from stages.render import vod_pts_offset
+    pts_off = vod_pts_offset(vod_path)
+
     duration = max(1.0, end_sec - start_sec)
+    seek_pos = start_sec + pts_off
+
+    # Use dual-seek for sample-accurate audio extraction:
+    # 1. Fast input seek to ~10 s before the target (keyframe-aligned, cheap)
+    # 2. Precise output seek to trim the remaining gap
+    # This avoids the keyframe-alignment offset that makes whisper timestamps
+    # start a second or two before the actual clip start.
+    _margin = 10.0
+    pre_seek  = max(0.0, seek_pos - _margin)
+    fine_seek = seek_pos - pre_seek
+
     tmp = Path(tempfile.mktemp(suffix=".wav"))
     try:
         subprocess.run(
             ["/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "-y",
-             "-ss", f"{start_sec:.3f}", "-i", str(vod_path),
+             "-ss", f"{pre_seek:.3f}", "-i", str(vod_path),
+             "-ss", f"{fine_seek:.3f}",
              "-t", f"{duration:.3f}", "-vn", "-ac", "1", "-ar", "16000",
              str(tmp)],
             check=True, capture_output=True,
@@ -511,8 +665,10 @@ def api_sfx_list():
 def api_log():
     kind = request.args.get("type", "detect")
     after = int(request.args.get("after", 0))
-    buf = _detect_log if kind == "detect" else _render_log
-    lock = _detect_lock if kind == "detect" else _render_lock
+    bufs = {"detect": (_detect_log, _detect_lock),
+            "render": (_render_log, _render_lock),
+            "import": (_import_log, _import_lock)}
+    buf, lock = bufs.get(kind, (_detect_log, _detect_lock))
     with lock:
         lines = list(buf)
     # return only lines after the given offset (for incremental polling)
@@ -619,11 +775,11 @@ def main():
             link.symlink_to(matches[0].resolve())
             print(f"Linked VOD: {matches[0]}")
 
-    url = "http://localhost:5001"
+    url = "http://localhost:5002"
     # Open browser slightly after Flask starts
     threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     print(f"GUI starting at {url}  (vod_id={vod_id})")
-    app.run(host="0.0.0.0", port=5001, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5002, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":

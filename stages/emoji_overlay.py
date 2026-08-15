@@ -11,6 +11,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .emoji_font import load_apple_emoji_font
+
 _EMOJI_RE = re.compile(
     "[\U0001F600-\U0001F64F"   # emoticons
     "\U0001F300-\U0001F5FF"    # misc symbols & pictographs
@@ -23,7 +25,6 @@ _EMOJI_RE = re.compile(
     "]+",
     flags=re.UNICODE,
 )
-_APPLE_EMOJI = "/System/Library/Fonts/Apple Color Emoji.ttc"
 _REASON_FALLBACK = {"chat_read": "💀", "audio": "🔥"}
 _DEFAULT_FALLBACK = "😂"
 
@@ -54,16 +55,16 @@ def render_emoji_png(emojis: list[str], font_size: int, out_path: Path) -> Path:
     """Render the emoji list as a transparent PNG."""
     text = "  ".join(emojis)
     try:
-        font = ImageFont.truetype(_APPLE_EMOJI, font_size)
+        font, strike = load_apple_emoji_font(font_size)
     except (OSError, IOError):
         try:
-            font = ImageFont.load_default(size=font_size)
+            font, strike = ImageFont.load_default(size=font_size), font_size
         except TypeError:
-            font = ImageFont.load_default()
+            font, strike = ImageFont.load_default(), font_size
 
     probe = Image.new("RGBA", (1, 1))
     bbox = ImageDraw.Draw(probe).textbbox((0, 0), text, font=font)
-    pad = 12
+    pad = max(12, strike // 12)
     w = max(bbox[2] - bbox[0] + pad * 2, 1)
     h = max(bbox[3] - bbox[1] + pad * 2, 1)
 
@@ -72,5 +73,9 @@ def render_emoji_png(emojis: list[str], font_size: int, out_path: Path) -> Path:
         (pad - bbox[0], pad - bbox[1]),
         text, font=font, embedded_color=True,
     )
+    if strike != font_size:
+        scale = font_size / strike
+        img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))),
+                          Image.LANCZOS)
     img.save(out_path, "PNG")
     return out_path

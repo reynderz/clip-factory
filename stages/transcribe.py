@@ -19,9 +19,7 @@ _MODEL: WhisperModel | None = None
 def _get_model() -> WhisperModel:
     global _MODEL
     if _MODEL is None:
-        # "base" is fast and good enough for short clips. Upgrade to
-        # "small" or "medium" for better accuracy on quiet audio.
-        _MODEL = WhisperModel("base", device="auto", compute_type="auto")
+        _MODEL = WhisperModel("small", device="auto", compute_type="auto")
     return _MODEL
 
 
@@ -30,7 +28,8 @@ def transcribe(audio_or_video: Path) -> list[Word]:
     segments, _info = model.transcribe(
         str(audio_or_video),
         word_timestamps=True,
-        vad_filter=True,           # skip silences
+        vad_filter=True,
+        beam_size=5,
     )
     words: list[Word] = []
     for seg in segments:
@@ -39,6 +38,9 @@ def transcribe(audio_or_video: Path) -> list[Word]:
         for w in seg.words:
             text = w.word.strip()
             if not text:
+                continue
+            # Drop zero-duration words (timing artifacts from silent sections)
+            if w.end <= w.start:
                 continue
             words.append(Word(start=w.start, end=w.end, text=text))
     return words
