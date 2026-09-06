@@ -305,13 +305,27 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
         _hit_words = apply_cuts_to_words(_hit_words, clip_cuts, duration_sec)
         curse_hits = [{"start": w.start, "end": w.end} for w in _hit_words]
 
-    # SFX triggers: words tagged with an sfx file in the GUI
-    _sfx_triggers = [
+    # SFX triggers: words tagged with an sfx file in the GUI.
+    # Like curse-word timestamps above, these are in the ORIGINAL (pre-cut)
+    # clip timeline and must be remapped onto the post-cut timeline, or every
+    # sfx after a jump cut plays increasingly out of sync with what it was
+    # tagged to.
+    _raw_sfx_triggers = [
         {"file": w["sfx"], "start": w["start"], "end": w["end"],
          "volume": w.get("sfx_volume", 0.5)}
         for w in (clip.get("words") or [])
         if w.get("sfx")
-    ] or None
+    ]
+    if clip_cuts and _raw_sfx_triggers:
+        _sfx_words = [transcribe.Word(text=str(i), start=t["start"], end=t["end"])
+                      for i, t in enumerate(_raw_sfx_triggers)]
+        _sfx_words = apply_cuts_to_words(_sfx_words, clip_cuts, duration_sec)
+        _sfx_triggers = [
+            {**_raw_sfx_triggers[int(w.text)], "start": w.start, "end": w.end}
+            for w in _sfx_words
+        ] or None
+    else:
+        _sfx_triggers = _raw_sfx_triggers or None
     if curse_hits:
         print(f"  censoring {len(curse_hits)} word(s)")
 
@@ -406,10 +420,16 @@ def cmd_render(args):
     vod_id = args.vod_id
     work = WORK / vod_id
     vod = work / f"{vod_id}.mp4"
-    approved = json.loads((work / "approved.json").read_text())
+    # Pair each clip with its position in the full approved list *before*
+    # any --only-clip filtering, so filenames (clip_{idx:03d}__...) always
+    # reflect the clip's real slot — otherwise a filtered run always starts
+    # counting from 1 and silently overwrites whatever clip actually sits
+    # at position 1's output files.
+    approved = list(enumerate(json.loads((work / "approved.json").read_text()), 1))
 
     if args.only_clip is not None:
-        approved = [c for c in approved if abs(c["peak_sec"] - args.only_clip) < 0.01]
+        approved = [(i, c) for i, c in approved
+                    if abs(c["peak_sec"] - args.only_clip) < 0.01]
 
     # Render-modal subs overrides — applied LAST so they beat per-clip subs.
     # Position is also written directly into cfg["subs"] so that clips without
@@ -466,7 +486,7 @@ def cmd_render(args):
     music_run_key = random.randint(0, (1 << 20) - 1)
 
     total_rendered = 0
-    for i, c in enumerate(approved, 1):
+    for i, c in approved:
         start, end = c["start_sec"], c["end_sec"]
         scene = classify_scene.classify_scene(vod, start, end, cfg)
         has_msg = c.get("chat_message") is not None
@@ -694,9 +714,10 @@ def main():
     p2.add_argument("--subs-font-size", type=int, default=None,
                     help="Override subtitle font size")
     p2.add_argument("--subs-style", type=str, default=None,
-                    choices=["karaoke", "word_pop"],
+                    choices=["karaoke", "word_pop", "none"],
                     help="karaoke = full line, active word highlighted (default); "
-                         "word_pop = one word at a time, MrBeast-style bounce")
+                         "word_pop = one word at a time, MrBeast-style bounce; "
+                         "none = no subtitles")
     p2.add_argument("--emoji-theme", action="store_true", default=False,
                     help="Pop random emoji above the subtitles as words are spoken")
     p2.add_argument("--force-chat", action="store_true", default=False,

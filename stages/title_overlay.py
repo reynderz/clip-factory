@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from .emoji_font import load_apple_emoji_font
+from .fonts import komika_font_path
 
 _EMOJI_RE = re.compile(
     u'[\U0001F300-\U0001FAFF'
@@ -41,7 +42,7 @@ def render_title_png(title: str, cfg: dict, out_path: Path) -> Path:
     text = title.upper() if s.get("all_caps") else title
 
     # Load fonts
-    komika = Path.home() / "Library" / "Fonts" / "KOMIKAX_.ttf"
+    komika = komika_font_path()
     try:
         main_font = ImageFont.truetype(str(komika), font_size)
     except OSError:

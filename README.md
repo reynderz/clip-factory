@@ -1,5 +1,9 @@
 # Clip Factory
 
+> New to this / geen programmeerervaring? Read **[STARTHIER.md](STARTHIER.md)**
+> first — a full Windows install + usage guide in Dutch and English for
+> non-technical users.
+
 Twitch-VOD → many-variant TikTok clips. One review pass, every approved clip
 gets rendered through every applicable variant (centered, blurred, brainrot
 with parkour/minecraft, with/without chat overlay, with/without music).
@@ -33,14 +37,49 @@ Watch-party variants (`watch_party_*`):
 - ffmpeg + ffprobe
 - yt-dlp
 - TwitchDownloaderCLI on PATH (https://github.com/lay295/TwitchDownloader/releases)
-- Komika Axis font installed system-wide
+- Komika Axis font installed system-wide (`KOMIKAX_.ttf`)
+
+### Windows setup
+
+```powershell
+winget install Git.Git Gyan.FFmpeg Python.Python.3.12
+```
+
+- **yt-dlp**: `pip install yt-dlp` (already in `requirements.txt`, but you can
+  also `winget install yt-dlp.yt-dlp` if you want it globally on PATH too).
+- **TwitchDownloaderCLI**: download the `win-x64` build from
+  https://github.com/lay295/TwitchDownloader/releases, unzip it, and put the
+  folder containing `TwitchDownloaderCLI.exe` on your PATH (System Properties
+  → Environment Variables → Path).
+- **Komika Axis font**: put `KOMIKAX_.ttf` in
+  `%LOCALAPPDATA%\Microsoft\Windows\Fonts\` **and** right-click it →
+  "Install" (or "Install for all users") so Windows registers the family
+  name — ffmpeg's subtitle renderer (libass) looks it up by name, not by
+  file path, so just dropping the file in a folder isn't enough.
+- **Encoder**: `configs/_global.yaml` defaults to `libx264` (CPU, works
+  everywhere). If you have an NVIDIA/Intel/AMD GPU you can switch
+  `output.encoder` to `h264_nvenc`, `h264_qsv`, or `h264_amf` for faster
+  renders — run `ffmpeg -encoders | findstr h264` to see what your ffmpeg
+  build supports.
+- Run everything from **PowerShell**, not `cmd.exe`.
 
 ## Python
 
+macOS / Linux:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Windows (PowerShell):
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+If `Activate.ps1` is blocked by execution policy, run PowerShell as your
+user and allow local scripts once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ## Configure
 

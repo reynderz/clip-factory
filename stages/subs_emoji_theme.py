@@ -22,6 +22,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .transcribe import Word
 from .emoji_font import load_apple_emoji_font
+from .fonts import komika_font_path
 from .subtitle import effective_font_size, get_style
 
 # One overlay tuple: (png_path, start_sec, duration_sec, x_offset_frac).
@@ -29,7 +30,7 @@ from .subtitle import effective_font_size, get_style
 # frame-center, as a fraction of frame width.
 EmojiPop = tuple[Path, float, float, float]
 
-_KOMIKA_FONT_PATH = Path.home() / "Library" / "Fonts" / "KOMIKAX_.ttf"
+_KOMIKA_FONT_PATH = komika_font_path()
 
 
 def _load_text_font(size: int) -> ImageFont.FreeTypeFont:

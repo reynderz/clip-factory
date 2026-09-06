@@ -114,15 +114,38 @@ def subtitle_seek_offset(vod: Path, start: float) -> float:
     return 0.0
 
 
-def _video_enc_args(cfg: dict) -> list[str]:
+def _video_enc_args(cfg: dict, has_cuts: bool = False) -> list[str]:
     encoder = cfg["output"].get("encoder", "libx264")
+    # h264_nvenc's -force_key_frames (used to plant a keyframe at each jump-cut
+    # splice point) is unreliable in practice: confirmed across a real batch
+    # that identical code/flags land the keyframe for some layouts/variants
+    # and silently drop it for others, with no consistent pattern tied to
+    # preset, rc-lookahead, bf, or forced-idr settings. Rather than risk a
+    # cut re-predicting from unrelated content, cut clips fall back to
+    # libx264, which reliably auto-detects the scene change itself
+    # (scenecut=40) and always inserts a real I-frame there.
+    if has_cuts and encoder == "h264_nvenc":
+        encoder = "libx264"
     args = ["-c:v", encoder]
     if encoder == "libx264":
         args += ["-preset", "medium", "-crf", str(cfg["output"]["crf"])]
+    elif encoder == "h264_nvenc":
+        # cq mirrors crf (lower = higher quality); b:v 0 lets cq drive quality
+        # instead of a fixed bitrate cap.
+        args += ["-preset", "p5", "-rc", "vbr", "-cq", str(cfg["output"]["crf"]),
+                  "-b:v", "0"]
     elif encoder == "h264_videotoolbox":
         args += ["-b:v", cfg["output"].get("videotoolbox_bitrate", "8M")]
     else:
         args += ["-crf", str(cfg["output"]["crf"])]
+    # Some filter-graph combinations (notably the plain crop/scale chain used
+    # by gameplay_zoom, which has no downstream overlay/blend step to
+    # normalise format) let libavfilter auto-negotiate up to yuv444p. That
+    # profile has little to no hardware decode support, so playback on phones
+    # and lightweight players stutters/hiccups even though the encode itself
+    # succeeds. Pin the delivery-standard 4:2:0 format explicitly so this
+    # never depends on filter-graph guesswork.
+    args += ["-pix_fmt", "yuv420p"]
     return args
 
 
@@ -253,10 +276,11 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
             )
 
         if ol_slot is not None:
-            filt += f";[v][{ol_slot}:v]overlay=0:0:format=auto,setsar=1[vout]"
+            filt += f";[v][{ol_slot}:v]overlay=0:0:format=auto,setsar=1,format=yuv420p[vout]"
             map_v = "[vout]"
         else:
-            map_v = "[v]"
+            filt += ";[v]format=yuv420p[vout2]"
+            map_v = "[vout2]"
 
         _run_ffmpeg([
             "ffmpeg", "-y",
@@ -324,11 +348,13 @@ def _render_stinger_segment(stinger_path: Path, layout: str,
         if overlay_path:
             inputs += ["-loop", "1", "-i", str(overlay_path)]
             _ov_y = int(cfg.get("overlay", {}).get("y_offset", 0))
-            filt = layout_filt + f";[v][1:v]overlay=0:{_ov_y}:format=auto,setsar=1[vout]"
+            filt = layout_filt + (
+                f";[v][1:v]overlay=0:{_ov_y}:format=auto,setsar=1,format=yuv420p[vout]"
+            )
             map_v = "[vout]"
         else:
-            filt = layout_filt
-            map_v = "[v]"
+            filt = layout_filt + ";[v]format=yuv420p[vout2]"
+            map_v = "[vout2]"
 
         _run_ffmpeg([
             "ffmpeg", "-y",
@@ -375,11 +401,15 @@ def render_raw_clip(vod: Path, start: float, end: float, out_path: Path) -> Path
 
 
 def _build_cuts_filter(duration: float,
-                        cuts: list[dict]) -> tuple[list[str], float]:
-    """Return (extra filter stages, kept duration) for jump cuts.
+                        cuts: list[dict]) -> tuple[list[str], float, list[float]]:
+    """Return (extra filter stages, kept duration, splice boundary times) for
+    jump cuts.
 
     cuts = [{start, end}, ...] clip-relative seconds to REMOVE.
     Output labels: [v_cut] (video), [a_cut] (audio).
+    Boundary times are cumulative positions (seconds, in the OUTPUT/kept
+    timeline) where two unrelated segments get spliced together by concat —
+    callers use these to force a keyframe there (see render_clip).
     """
     segs: list[tuple[float, float]] = []
     cur = 0.0
@@ -391,7 +421,7 @@ def _build_cuts_filter(duration: float,
     if cur < duration - 0.01:
         segs.append((cur, duration))
     if not segs:
-        return [], 0.0
+        return [], 0.0, []
 
     stages: list[str] = []
     kept = sum(e - s for s, e in segs)
@@ -406,7 +436,7 @@ def _build_cuts_filter(duration: float,
         stages.append(
             f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS[a_cut]"
         )
-        return stages, kept
+        return stages, kept, []
 
     n = len(segs)
 
@@ -420,17 +450,36 @@ def _build_cuts_filter(duration: float,
     stages.append("".join(f"[vc{i}]" for i in range(n))
                   + f"concat=n={n}:v=1:a=0[v_cut]")
 
+    # Jump cuts splice unrelated audio samples back-to-back; without a fade at
+    # each seam the waveform jumps discontinuously and produces an audible
+    # click/pop at every cut. A short (15ms) fade in/out on every kept segment
+    # is inaudible as a level change but guarantees zero-crossing at the
+    # boundary, eliminating the click.
+    _DECLICK_FADE = 0.015
     asplit = "".join(f"[as{i}]" for i in range(n))
     stages.append(f"[0:a]asplit={n}{asplit}")
     for i, (s, e) in enumerate(segs):
+        seg_dur = e - s
+        fade = min(_DECLICK_FADE, seg_dur / 2)
         stages.append(
             f"[as{i}]atrim=start={s:.3f}:end={e:.3f},"
-            f"asetpts=PTS-STARTPTS[ac{i}]"
+            f"asetpts=PTS-STARTPTS,"
+            f"afade=t=in:st=0:d={fade:.4f},"
+            f"afade=t=out:st={seg_dur - fade:.4f}:d={fade:.4f}[ac{i}]"
         )
     stages.append("".join(f"[ac{i}]" for i in range(n))
                   + f"concat=n={n}:v=0:a=1[a_cut]")
 
-    return stages, kept
+    # Cumulative kept-duration at each internal splice (i.e. every seam
+    # except the very end) — where concat glues two unrelated moments
+    # together with no encoder-visible scene-cut hint.
+    boundaries: list[float] = []
+    acc = 0.0
+    for s, e in segs[:-1]:
+        acc += e - s
+        boundaries.append(round(acc, 3))
+
+    return stages, kept, boundaries
 
 
 def render_clip(vod: Path, start: float, end: float,
@@ -612,11 +661,25 @@ def render_clip(vod: Path, start: float, end: float,
 
     # ── Jump cuts: split/trim/concat before layout ──
     cut_stages: list[str] = []
+    cut_boundaries: list[float] = []
     if cuts:
-        cut_stages, duration = _build_cuts_filter(duration, cuts)
+        cut_stages, duration, cut_boundaries = _build_cuts_filter(duration, cuts)
         # _build_cuts_filter uses [0:v]/[0:a]; rewrite to our normalised labels
         cut_stages = [s.replace("[0:v]", "[v_src]").replace("[0:a]", "[a_src]")
                       for s in cut_stages]
+        if cut_stages:
+            # concat's audio output has irregular frame chunking around the
+            # asetpts-reset segment boundaries. Handing that straight to
+            # loudnorm confuses the final aresample=async's gap detection
+            # (see below), which then aggressively stretches/skips samples
+            # for the first ~2.5s of the WHOLE clip — not just near a cut
+            # boundary — audible as scrambled/stuttering audio right at the
+            # start. Re-syncing here, before loudnorm ever sees the concat
+            # output, avoids the interaction entirely.
+            cut_stages.append(
+                "[a_cut]aresample=async=1:min_hard_comp=0.100000:"
+                "first_pts=0[a_cut_rs]"
+            )
 
     # ── Build the video filter chain ──
     layout_filter = crop_mod.build_filter(cfg, layout, scene,
@@ -627,7 +690,7 @@ def render_clip(vod: Path, start: float, end: float,
                                           swap=swap)
     if cuts and cut_stages:
         layout_filter = layout_filter.replace("[0:v]", "[v_cut]")
-        audio_plan.filter_chain = audio_plan.filter_chain.replace("[0:a]", "[a_cut]")
+        audio_plan.filter_chain = audio_plan.filter_chain.replace("[0:a]", "[a_cut_rs]")
     else:
         layout_filter = layout_filter.replace("[0:v]", "[v_src]")
         audio_plan.filter_chain = audio_plan.filter_chain.replace("[0:a]", "[a_src]")
@@ -739,16 +802,26 @@ def render_clip(vod: Path, start: float, end: float,
             )
             current = lbl_out
 
-    # ffmpeg 8.x requires explicit filename= for the ass filter
-    esc = str(ass_path).replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
+    # ffmpeg 8.x requires explicit filename= for the ass filter.
+    # Use forward slashes (as_posix()) even on Windows: escaping backslashes
+    # for the filtergraph parser (\ -> \\) is technically correct per ffmpeg's
+    # docs but its filter-option parser chokes on the doubled backslashes in
+    # practice (`No option name near ...`) — forward slashes sidestep that
+    # entirely and Windows accepts them natively. The drive-letter colon still
+    # needs escaping, and needs it TWICE (\\:) — the ass filter's own option
+    # parser and the outer filtergraph parser each unescape one level.
+    # Verified against ffmpeg 9.0 on Windows: single '\:' fails with
+    # "No option name near ..."; '\\:' works.
+    esc = ass_path.as_posix().replace(':', '\\\\:').replace("'", "\\'")
     if overlay_slot is not None:
         _ov_y = int(cfg.get("overlay", {}).get("y_offset", 0))
         stages.append(f"{current}ass=filename={esc},setsar=1[vpre_overlay]")
         stages.append(
-            f"[vpre_overlay][{overlay_slot}:v]overlay=0:{_ov_y}:format=auto,setsar=1[vout]"
+            f"[vpre_overlay][{overlay_slot}:v]overlay=0:{_ov_y}:format=auto,"
+            f"setsar=1,format=yuv420p[vout]"
         )
     else:
-        stages.append(f"{current}ass=filename={esc},setsar=1[vout]")
+        stages.append(f"{current}ass=filename={esc},setsar=1,format=yuv420p[vout]")
 
     # ── Combine video and audio filter chains ──
     full_filter = ";".join(stages) + ";" + audio_plan.filter_chain
@@ -812,8 +885,29 @@ def render_clip(vod: Path, start: float, end: float,
         )
         final_audio = "[_aout_sfx]"
 
+    # Twitch VODs occasionally carry non-monotonic audio DTS around ad-break
+    # discontinuities (same root cause as the video stall guarded above).
+    # +genpts and asetpts fix the audio's own PTS at trim time, but the
+    # loudnorm/amix chain can still hand the AAC encoder samples with
+    # irregular spacing, producing "Non-monotonic DTS" / "Queue input is
+    # backward in time" at mux time and audible glitches in the output.
+    # aresample=async=1 re-syncs the stream to a strictly monotonic clock
+    # (inserting/dropping samples as needed) right before encoding.
+    # first_pts=0 anchors the timeline at the very first sample instead of
+    # whatever PTS the loudnorm/amix chain happens to report there — without
+    # it, async perceives a (spurious) large gap at t=0 and aggressively
+    # stretches audio to "catch up", audible as speed-up + stutter for the
+    # first few seconds until it settles. min_hard_comp=0.1 keeps any real
+    # correction to smooth stretching instead of an audible hard sample
+    # skip/insert unless the drift exceeds 100ms.
+    full_filter += (
+        f";{final_audio}aresample=async=1:min_hard_comp=0.100000:"
+        f"first_pts=0[_afinal]"
+    )
+    final_audio = "[_afinal]"
+
     # ── Encoder ──
-    video_enc_args = _video_enc_args(cfg)
+    video_enc_args = _video_enc_args(cfg, has_cuts=bool(cut_boundaries))
 
     # If a stinger is requested, render the main clip to a temp file first,
     # then concat the stinger segment after.
@@ -833,6 +927,17 @@ def render_clip(vod: Path, start: float, end: float,
         "-map", final_audio,
         "-r", str(fps),
         *video_enc_args,
+    ]
+    if cut_boundaries:
+        # Jump cuts splice two unrelated moments together with concat; unlike
+        # libx264 (which auto-detects the scene change via scenecut= and
+        # inserts an I-frame there), h264_nvenc doesn't, so the first frames
+        # after a cut get predicted from content that no longer resembles
+        # them — visible as a blocky/stuttery beat right at the cut. Forcing
+        # a keyframe exactly at each splice point fixes this for every
+        # encoder, not just nvenc.
+        cmd += ["-force_key_frames", ",".join(f"{b:.3f}" for b in cut_boundaries)]
+    cmd += [
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(render_target),

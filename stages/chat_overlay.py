@@ -9,6 +9,7 @@ Visual design matches Twitch's chat UI:
 """
 from __future__ import annotations
 import hashlib
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -40,12 +41,15 @@ def _user_color_rgb(username: str) -> tuple[int, int, int, int]:
 def _load_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
     """Load a clean sans-serif font suitable for Twitch-style chat."""
     home = Path.home()
+    win_fonts = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "Fonts"
     bold_candidates = [
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/Library/Fonts/Arial Bold.ttf",
         str(home / "Library" / "Fonts" / "Arial Bold.ttf"),
         "/System/Library/Fonts/Supplemental/Verdana Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        str(win_fonts / "arialbd.ttf"),
+        str(win_fonts / "segoeuib.ttf"),
     ]
     regular_candidates = [
         "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -53,6 +57,8 @@ def _load_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
         str(home / "Library" / "Fonts" / "Arial.ttf"),
         "/System/Library/Fonts/Helvetica.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        str(win_fonts / "arial.ttf"),
+        str(win_fonts / "segoeui.ttf"),
     ]
     for path in (bold_candidates if bold else regular_candidates):
         try:

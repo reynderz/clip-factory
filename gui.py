@@ -126,12 +126,33 @@ def _part_offset() -> float:
     return 0.0
 
 
+def _link_video(link: Path, target: Path) -> None:
+    """Point `link` at `target`. Prefers a symlink, but Windows requires
+    Developer Mode or Administrator for those, so fall back to a hardlink
+    (no privilege needed, no extra disk space, same-volume only) and finally
+    a full copy if the two paths are on different volumes."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        try:
+            os.link(target, link)
+        except OSError:
+            import shutil
+            shutil.copy2(target, link)
+
+
 def _ffmpeg_env() -> dict:
     env = os.environ.copy()
     ffmpeg_bin = "/opt/homebrew/opt/ffmpeg-full/bin"
-    path = env.get("PATH", "")
-    if ffmpeg_bin not in path:
-        env["PATH"] = ffmpeg_bin + ":" + path
+    if os.path.isdir(ffmpeg_bin):
+        path = env.get("PATH", "")
+        if ffmpeg_bin not in path:
+            env["PATH"] = ffmpeg_bin + os.pathsep + path
+    # Child stdout is piped (not a console), so on Windows Python falls back
+    # to the legacy ANSI codepage for stdio and crashes on non-ASCII prints
+    # like the "→" arrows used in stage logging.
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     return env
 
 
@@ -191,7 +212,8 @@ def serve_video(vod_id: str):
 
 @app.route("/font/KOMIKAX_.ttf")
 def serve_font():
-    font_path = Path.home() / "Library" / "Fonts" / "KOMIKAX_.ttf"
+    from stages.fonts import komika_font_path
+    font_path = komika_font_path()
     if not font_path.exists():
         raise NotFound("Font not found")
     return send_file(str(font_path), mimetype="font/truetype")
@@ -628,7 +650,7 @@ def api_transcribe():
     tmp = Path(tempfile.mktemp(suffix=".wav"))
     try:
         subprocess.run(
-            ["/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "-y",
+            ["ffmpeg", "-y",
              "-ss", f"{pre_seek:.3f}", "-i", str(vod_path),
              "-ss", f"{fine_seek:.3f}",
              "-t", f"{duration:.3f}", "-vn", "-ac", "1", "-ar", "16000",
@@ -747,7 +769,7 @@ def api_vod_set():
         link = work / f"{vod_id}.mp4"
         if link.exists() or link.is_symlink():
             link.unlink()
-        link.symlink_to(fp)
+        _link_video(link, fp)
 
     app.config["VOD_ID"] = vod_id
     return jsonify({"ok": True, "vod_id": vod_id})
@@ -772,7 +794,7 @@ def main():
         vods_dir = ROOT.parent / "vods"
         matches = sorted(vods_dir.glob(f"{vod_id}*.mp4")) if vods_dir.is_dir() else []
         if matches:
-            link.symlink_to(matches[0].resolve())
+            _link_video(link, matches[0].resolve())
             print(f"Linked VOD: {matches[0]}")
 
     url = "http://localhost:5002"

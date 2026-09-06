@@ -1,7 +1,29 @@
 """Transcribe a clip to word-level timestamps using faster-whisper."""
 from __future__ import annotations
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+if sys.platform == "win32":
+    # ctranslate2 dlopen's cuBLAS/cuDNN lazily, on the first real GPU call
+    # (not at WhisperModel construction), and it does NOT search
+    # site-packages\nvidia\*\bin on its own even though pip put the DLLs
+    # there. ctranslate2's native loader calls LoadLibraryA without the
+    # search flags that respect os.add_dll_directory(), so the only thing
+    # that reliably works is putting these directories on PATH itself
+    # (the classic DLL search order always consults PATH).
+    import sysconfig
+    _site_packages = Path(sysconfig.get_paths()["purelib"])
+    _extra = [
+        str(_site_packages / "nvidia" / _pkg / "bin")
+        for _pkg in ("cublas", "cudnn", "cuda_nvrtc")
+        if (_site_packages / "nvidia" / _pkg / "bin").is_dir()
+    ]
+    if _extra:
+        os.environ["PATH"] = os.pathsep.join(_extra) + os.pathsep + os.environ.get("PATH", "")
+        for _dir in _extra:
+            os.add_dll_directory(_dir)
 
 from faster_whisper import WhisperModel
 

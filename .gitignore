@@ -42,6 +42,9 @@ sfx/*.flac
 # macOS
 .DS_Store
 
+# Runtime logs
+*.log
+
 # Partial downloads
 *.part
 *.ytdl

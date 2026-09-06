@@ -83,7 +83,11 @@ output:
   fps: 30
   crf: 20
   dir: ./out
-  encoder: h264_videotoolbox          # Apple Silicon hardware encoder
+  # libx264 (CPU) works on every OS. On Windows with an NVIDIA/Intel/AMD GPU
+  # you can switch to a hardware encoder for speed: h264_nvenc, h264_qsv, or
+  # h264_amf (check `ffmpeg -encoders | findstr h264` for what's available).
+  # On Apple Silicon, use h264_videotoolbox (+ videotoolbox_bitrate below).
+  encoder: h264_nvenc
   videotoolbox_bitrate: "8M"
 
 # ─── Audio processing ─────────────────────────────────────────────
@@ -99,7 +103,7 @@ audio:
   # Background music settings (used only by music-on variants).
   music:
     folder: "music"        # relative to project root; drop .mp3/.wav files in
-    volume_db: -18.0       # how loud relative to streamer's voice
+    volume_db: -14.0       # how loud relative to streamer's voice
     duck_when_speaking: true   # auto-duck music when streamer talks (sidechain)
     duck_amount_db: -8.0       # extra reduction during speech
     # Per-file start offsets (seconds) — skip long intros
