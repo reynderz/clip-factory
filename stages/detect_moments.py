@@ -12,8 +12,9 @@ There's no separate mic-only audio track (Twitch VODs ship one mixed
 stereo track), so "mic peak" is a band-pass proxy rather than a true
 isolated channel.
 
-A candidate is scored as a weighted sum. We merge overlapping candidates
-and cap at `max_candidates_per_vod`.
+A candidate is scored as a weighted sum. We merge overlapping/nearby
+candidates, capping merged length at `max_candidate_duration_sec` so a
+long sustained-hype stretch doesn't chain into one giant candidate.
 """
 from __future__ import annotations
 import subprocess
@@ -105,15 +106,18 @@ def mic_band_rms(vod_path: Path, duration_sec: float, window: float,
 
 
 # ─────────────────────────── merge ─────────────────────────────
-def _merge(cands: list[Candidate], min_gap: float) -> list[Candidate]:
+def _merge(cands: list[Candidate], min_gap: float,
+           max_duration: float | None = None) -> list[Candidate]:
     if not cands:
         return []
     cands.sort(key=lambda c: c.start_sec)
     out = [cands[0]]
     for c in cands[1:]:
         last = out[-1]
-        if c.start_sec - last.end_sec < min_gap:
-            last.end_sec = max(last.end_sec, c.end_sec)
+        merged_end = max(last.end_sec, c.end_sec)
+        fits = max_duration is None or merged_end - last.start_sec <= max_duration
+        if c.start_sec - last.end_sec < min_gap and fits:
+            last.end_sec = merged_end
             last.score = max(last.score, c.score)
             last.reasons = list(set(last.reasons + c.reasons))
         else:
@@ -185,8 +189,6 @@ def detect(vod_path: Path, msgs: list[ChatMessage], duration_sec: float,
         lo = max(0, int(start - d["min_gap_sec"]))
         hi = min(n, int(end + d["min_gap_sec"]) + 1)
         taken[lo:hi] = True
-        if len(cands) >= d["max_candidates_per_vod"]:
-            break
 
     cands.sort(key=lambda c: -c.score)
     return cands

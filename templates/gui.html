@@ -1139,6 +1139,11 @@ kbd {
         <div><div class="export-opt-name" style="color:#fbbf24">✨ Emoji theme</div>
              <div class="export-opt-desc">Random emoji pop above the captions as words are spoken (MrBeast-style).</div></div>
       </label>
+      <label class="export-opt" id="opt-jump-cuts" style="border-color:#22c55e;margin-top:8px">
+        <input type="checkbox" id="exp-jump-cuts" style="accent-color:#22c55e">
+        <div><div class="export-opt-name" style="color:#4ade80">✂️ Jump cuts</div>
+             <div class="export-opt-desc">Auto-cut silence between words to tighten pacing (uses the clip's transcript).</div></div>
+      </label>
     </div>
 
     <!-- Song picker (shown only for solo clip renders) -->
@@ -2575,6 +2580,7 @@ document.getElementById('btn-render-go').addEventListener('click', async () => {
   const fontSize   = parseInt(document.getElementById('subs-font-size').value) || 110;
   const chatOn     = document.getElementById('exp-chat').checked;
   const emojiTheme = document.getElementById('exp-emoji-theme').checked;
+  const jumpCuts   = document.getElementById('exp-jump-cuts').checked;
   const songFile   = document.getElementById('song-select').value;
   const payload   = {
     only_variants: selected.join(','),
@@ -2584,6 +2590,7 @@ document.getElementById('btn-render-go').addEventListener('click', async () => {
     subs_style: _subsStyle,
     chat_y_frac: _chatYFrac,
     ...(emojiTheme ? {emoji_theme: true} : {}),
+    ...(jumpCuts ? {jump_cuts: true} : {}),
     ...(chatOn ? {force_chat: true} : {}),
     ...(songFile ? {music_file: songFile} : {}),
   };

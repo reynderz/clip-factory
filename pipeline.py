@@ -32,7 +32,7 @@ from pathlib import Path
 
 from stages import (fetch, detect_moments, detect_chat_reading,
                     transcribe_vod, classify_scene, transcribe, subtitle,
-                    render, chat_overlay, censor, import_folder)
+                    render, chat_overlay, censor, import_folder, jump_cuts)
 from stages.subtitle import apply_cuts_to_words
 from stages.cfg import load_global, load_variants, variant_applies
 from review import review as review_cli
@@ -95,10 +95,10 @@ def cmd_detect(args):
             score=1.5 + (e.score - 55) / 100,
             reasons=[f"chat_read={e.score:.0f}"],
         ) for e in chat_events]
-        cands = detect_moments._merge(cands + extra,
-                                      cfg["detection"]["min_gap_sec"])
+        cands = detect_moments._merge(
+            cands + extra, cfg["detection"]["min_gap_sec"],
+            cfg["detection"]["max_candidate_duration_sec"])
         cands.sort(key=lambda c: -c.score)
-        cands = cands[:cfg["detection"]["max_candidates_per_vod"]]
     else:
         print("[3/4] Chat-reading detection disabled.")
 
@@ -299,6 +299,12 @@ def _render_one_variant(vod: Path, clip: dict, scene: str, words,
     # subtitle words are (see words_for_ass below).
     clip_cuts = clip.get("cuts") or []
     duration_sec = end - start
+    if cfg.get("jump_cuts", {}).get("enabled", False):
+        _words_for_jc = clip.get("words") or words
+        auto_cuts = jump_cuts.detect_silence_cuts(_words_for_jc, duration_sec, cfg)
+        if auto_cuts:
+            print(f"  jump cuts: removing {len(auto_cuts)} silence gap(s)")
+        clip_cuts = clip_cuts + auto_cuts
     if clip_cuts and curse_hits:
         _hit_words = [transcribe.Word(text="", start=h["start"], end=h["end"])
                       for h in curse_hits]
@@ -447,6 +453,8 @@ def cmd_render(args):
         subs_cli["style"] = args.subs_style        # clips with subs (post-merge)
     if getattr(args, "emoji_theme", False):
         cfg.setdefault("subs_emoji_theme", {})["enabled"] = True
+    if getattr(args, "jump_cuts", False):
+        cfg.setdefault("jump_cuts", {})["enabled"] = True
 
     force_chat = getattr(args, "force_chat", False)
     # Applies whenever ANY clip shows chat — not just when force_chat is on,
@@ -623,10 +631,11 @@ def cmd_detect_only(args):
             score=1.5 + (e.score - 55) / 100,
             reasons=[f"chat_read={e.score:.0f}"],
         ) for e in chat_events]
-        cands = detect_moments._merge(cands + extra, cfg["detection"]["min_gap_sec"])
+        cands = detect_moments._merge(
+            cands + extra, cfg["detection"]["min_gap_sec"],
+            cfg["detection"]["max_candidate_duration_sec"])
         cands = [c for c in cands if c.start_sec < max_sec]
         cands.sort(key=lambda c: -c.score)
-        cands = cands[:cfg["detection"]["max_candidates_per_vod"]]
     else:
         print("[3/3] Chat-reading detection disabled.")
 
@@ -720,6 +729,8 @@ def main():
                          "none = no subtitles")
     p2.add_argument("--emoji-theme", action="store_true", default=False,
                     help="Pop random emoji above the subtitles as words are spoken")
+    p2.add_argument("--jump-cuts", action="store_true", default=False,
+                    help="Auto-cut silence between words to tighten pacing (overrides config default off)")
     p2.add_argument("--force-chat", action="store_true", default=False,
                     help="Force chat overlay on for all variants (only clips with a message selected)")
     p2.add_argument("--chat-y-frac", type=float, default=None,

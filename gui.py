@@ -424,6 +424,9 @@ def api_render_start():
         if body.get("emoji_theme"):
             cmd += ["--emoji-theme"]
 
+        if body.get("jump_cuts"):
+            cmd += ["--jump-cuts"]
+
         if body.get("force_chat"):
             cmd += ["--force-chat"]
 
@@ -434,8 +437,12 @@ def api_render_start():
         if chat_y is not None:
             cmd += ["--chat-y-frac", str(chat_y)]
 
+        # A chosen music file only applies to a single-clip render
+        # (only_clip set). For a full batch render, always let pipeline.py
+        # cycle a different random track per clip — otherwise every clip
+        # in the batch would get the same forced track.
         music_file = body.get("music_file", "").strip()
-        if music_file:
+        if music_file and only_clip is not None:
             cmd += ["--music-file", music_file]
 
         _render_state = "running"
